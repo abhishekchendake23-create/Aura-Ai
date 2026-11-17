@@ -141,7 +141,7 @@ fun SavedLibraryScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = msg.modelDisplayName.ifBlank { "Aura AI" },
+                                        text = "Aura AI · Abhynex",
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary
                                     )

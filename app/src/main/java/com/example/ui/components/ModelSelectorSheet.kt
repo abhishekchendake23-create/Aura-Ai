@@ -61,11 +61,18 @@ fun ModelSelectorSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 GeminiSparkleIcon(size = 24.dp)
-                Text(
-                    text = "Choose Gemini Model",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Column {
+                    Text(
+                        text = "Aura AI Modes",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Powered by Abhynex",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             ModelCategory.entries.forEach { category ->

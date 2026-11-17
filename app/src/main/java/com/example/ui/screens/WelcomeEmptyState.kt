@@ -25,11 +25,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Functions
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -59,10 +65,15 @@ fun WelcomeEmptyState(
     selectedModel: AiModelTier,
     personas: List<PersonaEntity>,
     activePersona: PersonaEntity?,
+    webSearchEnabled: Boolean = false,
+    codeExecutionEnabled: Boolean = false,
     onSelectModel: (AiModelTier) -> Unit,
     onSelectPersona: (PersonaEntity) -> Unit,
+    onToggleWebSearch: () -> Unit = {},
+    onToggleCodeExecution: () -> Unit = {},
     onStarterSelected: (PromptStarter) -> Unit,
     onOpenPersonaStudio: () -> Unit,
+    onOpenLiveVoice: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val auraColors = LocalAuraColors.current
@@ -97,7 +108,29 @@ fun WelcomeEmptyState(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.Start
         ) {
-            GeminiSparkleIcon(size = 42.dp, animate = true)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GeminiSparkleIcon(size = 40.dp, animate = true)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = "Aura AI · Abhynex",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -118,11 +151,164 @@ fun WelcomeEmptyState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Start
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Real-time Aura Live Voice Launch Card (30 Characters)
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .border(
+                        width = 1.dp,
+                        color = auraColors.sparkleStart.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .clickable(onClick = onOpenLiveVoice)
+                    .testTag("welcome_live_voice_card")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.GraphicEq,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Aura Live Voice",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Talk in real time · 30 voice characters",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Quick Power Tools Row (Python Sandbox & Web + URL Reader)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (codeExecutionEnabled) auraColors.emeraldContainer
+                    else MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(
+                            width = 1.dp,
+                            color = if (codeExecutionEnabled) auraColors.emerald.copy(alpha = 0.7f)
+                            else MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .clickable(onClick = onToggleCodeExecution)
+                        .testTag("welcome_sandbox_toggle")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Terminal,
+                            contentDescription = null,
+                            tint = if (codeExecutionEnabled) auraColors.emerald
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Python Lab",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (codeExecutionEnabled) "Live runner ON" else "Execute & verify",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (codeExecutionEnabled) auraColors.emerald
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (webSearchEnabled) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(
+                            width = 1.dp,
+                            color = if (webSearchEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .clickable(onClick = onToggleWebSearch)
+                        .testTag("welcome_web_toggle")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Public,
+                            contentDescription = null,
+                            tint = if (webSearchEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Web + Links",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (webSearchEnabled) "Grounding ON" else "Live search",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (webSearchEnabled) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(26.dp))
+        Spacer(modifier = Modifier.height(22.dp))
 
-        // Quick Model Switcher Row (All Gemini Models)
+        // Quick Aura AI Mode Switcher Row
         Row(
             modifier = Modifier
                 .widthIn(max = 600.dp)
@@ -132,7 +318,7 @@ fun WelcomeEmptyState(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "GEMINI MODELS",
+                text = "AURA AI MODES",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -367,6 +553,9 @@ private fun StarterCard(
 
 fun personaIconFor(iconKey: String) = when (iconKey) {
     "code" -> Icons.Rounded.Code
+    "bug" -> Icons.Rounded.BugReport
+    "math" -> Icons.Rounded.Functions
+    "search" -> Icons.Rounded.TravelExplore
     "analytics" -> Icons.Rounded.Psychology
     "edit" -> Icons.Rounded.Edit
     "school" -> Icons.Rounded.School

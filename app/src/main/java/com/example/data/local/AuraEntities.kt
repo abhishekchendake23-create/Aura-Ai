@@ -40,6 +40,7 @@ data class MessageEntity(
     val attachmentName: String? = null,
     val isImageAttachment: Boolean = false,
     val generatedImagePath: String? = null,
+    val sourcesJson: String? = null,
     val isBookmarked: Boolean = false,
     val isError: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()

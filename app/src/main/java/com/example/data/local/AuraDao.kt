@@ -14,8 +14,11 @@ interface AuraDao {
     @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
     suspend fun getConversationById(id: String): ConversationEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertConversation(conversation: ConversationEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertConversation(conversation: ConversationEntity)
+
+    @Query("UPDATE conversations SET updatedAt = :updatedAt WHERE id = :id")
+    suspend fun touchConversation(id: String, updatedAt: Long = System.currentTimeMillis())
 
     @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun renameConversation(id: String, title: String, updatedAt: Long = System.currentTimeMillis())
@@ -61,6 +64,9 @@ interface AuraDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPersona(persona: PersonaEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPersonas(personas: List<PersonaEntity>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertPersonas(personas: List<PersonaEntity>)

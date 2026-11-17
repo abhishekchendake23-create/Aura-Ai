@@ -143,13 +143,13 @@ fun SettingsSheet(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = "Firebase AI Logic · Connected",
+                        text = "Aura AI · Abhynex Active",
                         style = MaterialTheme.typography.titleSmall,
                         color = auraColors.emerald
                     )
                 }
                 Text(
-                    text = "Live streaming via Gemini 3.8 Flash, Gemini 4 Argon, Gemini 3.5 Flash-Lite, and Nano Banana image models with zero placeholder fallback.",
+                    text = "Powered by Abhynex intelligence modes, Aura Imagine visual synthesis, and 30 real-time voice characters.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )

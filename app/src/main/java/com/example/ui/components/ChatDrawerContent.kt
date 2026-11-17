@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
@@ -75,6 +76,7 @@ fun ChatDrawerContent(
     onDeleteConversation: (String) -> Unit,
     onOpenPersonaStudio: () -> Unit,
     onOpenSavedLibrary: () -> Unit,
+    onOpenLiveVoice: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -112,7 +114,7 @@ fun ChatDrawerContent(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Gemini Live",
+                            text = "by Abhynex",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -178,6 +180,14 @@ fun ChatDrawerContent(
             Spacer(modifier = Modifier.height(12.dp))
 
             DrawerNavShortcut(
+                icon = Icons.Rounded.GraphicEq,
+                title = "Aura Live Voice",
+                subtitle = "Real-time voice · 30 characters",
+                onClick = onOpenLiveVoice,
+                tag = "drawer_live_voice"
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            DrawerNavShortcut(
                 icon = Icons.Rounded.AutoAwesome,
                 title = "Persona Studio",
                 subtitle = "Switch or craft custom AI roles",
@@ -211,7 +221,7 @@ fun ChatDrawerContent(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (searchQuery.isBlank()) "No chats yet.\nAsk Gemini anything."
+                                text = if (searchQuery.isBlank()) "No chats yet.\nAsk Aura AI anything."
                                 else "No matching chats.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -305,7 +315,7 @@ fun ChatDrawerContent(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "AMOLED theme, models & history",
+                        text = "AMOLED theme, modes & history",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

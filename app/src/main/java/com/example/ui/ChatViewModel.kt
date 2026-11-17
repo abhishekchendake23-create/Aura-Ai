@@ -11,9 +11,12 @@ import com.example.data.local.AuraDatabase
 import com.example.data.local.ConversationEntity
 import com.example.data.local.MessageEntity
 import com.example.data.local.PersonaEntity
+import com.example.data.model.ALL_30_VOICE_CHARACTERS
 import com.example.data.model.AiModelTier
 import com.example.data.model.AttachmentDraft
+import com.example.data.model.AuraVoiceCharacter
 import com.example.data.model.CapabilityMode
+import com.example.data.model.SlashCommand
 import com.example.data.model.ThemeMode
 import com.example.data.preferences.PreferencesManager
 import com.example.data.repository.AiRepository
@@ -21,6 +24,9 @@ import com.example.data.repository.AiRequest
 import com.example.data.repository.AiStreamEvent
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.FirebaseAiRepository
+import com.example.data.repository.LiveVoiceManager
+import com.example.data.repository.LiveVoiceStatus
+import com.example.data.repository.serializeSources
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -42,6 +48,7 @@ sealed interface AppDestination {
     data object Chat : AppDestination
     data object PersonaStudio : AppDestination
     data object SavedLibrary : AppDestination
+    data object LiveVoice : AppDestination
 }
 
 data class StreamingMessageState(
@@ -61,6 +68,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AuraDatabase.getInstance(application)
     private val chatRepository = ChatRepository(database.auraDao())
     private val aiRepository: AiRepository = FirebaseAiRepository(application.applicationContext)
+    private val liveVoiceManager = LiveVoiceManager()
     private val prefs = PreferencesManager(application)
 
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Chat)
@@ -87,7 +95,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _bannerMessage = MutableStateFlow<String?>(null)
     val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
 
+    private val _liveVoiceStatus = MutableStateFlow<LiveVoiceStatus>(LiveVoiceStatus.Idle)
+    val liveVoiceStatus: StateFlow<LiveVoiceStatus> = _liveVoiceStatus.asStateFlow()
+
+    private val _isEnhancingPrompt = MutableStateFlow(false)
+    val isEnhancingPrompt: StateFlow<Boolean> = _isEnhancingPrompt.asStateFlow()
+
     private var activeGenerationJob: Job? = null
+    private var liveVoiceJob: Job? = null
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
 
@@ -109,10 +124,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = CapabilityMode.STANDARD
     )
 
+    val webSearchEnabled: StateFlow<Boolean> = prefs.webSearchEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    val codeExecutionEnabled: StateFlow<Boolean> = prefs.codeExecutionEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
     val activePersonaId: StateFlow<String> = prefs.activePersonaId.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = "persona_general"
+    )
+
+    val selectedVoice: StateFlow<AuraVoiceCharacter> = prefs.voiceCharacter.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ALL_30_VOICE_CHARACTERS.first()
     )
 
     val personas: StateFlow<List<PersonaEntity>> = chatRepository.observePersonas().stateIn(
@@ -183,7 +216,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateTo(dest: AppDestination) {
+        if (dest != AppDestination.LiveVoice && _destination.value == AppDestination.LiveVoice) {
+            stopLiveVoice()
+        }
         _destination.value = dest
+    }
+
+    fun startLiveVoice(voiceOverride: AuraVoiceCharacter? = null) {
+        stopSpeaking()
+        val chosenVoice = voiceOverride ?: selectedVoice.value
+        val persona = activePersona.value
+        liveVoiceJob?.cancel()
+        liveVoiceJob = viewModelScope.launch {
+            liveVoiceManager.startConversation(
+                voice = chosenVoice,
+                persona = persona
+            ) { status ->
+                _liveVoiceStatus.value = status
+            }
+        }
+    }
+
+    fun stopLiveVoice() {
+        liveVoiceJob?.cancel()
+        liveVoiceJob = null
+        viewModelScope.launch {
+            liveVoiceManager.stopConversation()
+            _liveVoiceStatus.value = LiveVoiceStatus.Idle
+        }
+    }
+
+    fun selectVoiceCharacter(voice: AuraVoiceCharacter) {
+        viewModelScope.launch {
+            prefs.setVoiceCharacter(voice.apiName)
+            if (_destination.value == AppDestination.LiveVoice &&
+                (_liveVoiceStatus.value is LiveVoiceStatus.Active || _liveVoiceStatus.value is LiveVoiceStatus.Connecting)
+            ) {
+                startLiveVoice(voiceOverride = voice)
+            }
+        }
     }
 
     fun updateComposerText(text: String) {
@@ -222,6 +293,91 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectCapability(mode: CapabilityMode) {
         viewModelScope.launch { prefs.setDefaultCapability(mode) }
+    }
+
+    fun toggleWebSearch() {
+        viewModelScope.launch {
+            val next = !webSearchEnabled.value
+            prefs.setWebSearchEnabled(next)
+            if (next && codeExecutionEnabled.value) {
+                prefs.setCodeExecutionEnabled(false)
+                _bannerMessage.value = "Live Web Search ON (Sandbox paused)"
+            } else {
+                _bannerMessage.value = if (next) "Live Web Search ON" else "Live Web Search OFF"
+            }
+        }
+    }
+
+    fun toggleCodeExecution() {
+        viewModelScope.launch {
+            val next = !codeExecutionEnabled.value
+            prefs.setCodeExecutionEnabled(next)
+            if (next && webSearchEnabled.value) {
+                prefs.setWebSearchEnabled(false)
+                _bannerMessage.value = "Python Sandbox ON (Web paused)"
+            } else {
+                _bannerMessage.value = if (next) "Python Sandbox ON" else "Python Sandbox OFF"
+            }
+        }
+    }
+
+    fun enhanceComposerPrompt() {
+        val current = _composerText.value.trim()
+        if (current.length < 4 || _isEnhancingPrompt.value) return
+        viewModelScope.launch {
+            _isEnhancingPrompt.value = true
+            aiRepository.enhancePrompt(current)
+                .onSuccess { improved ->
+                    _composerText.value = improved
+                    _bannerMessage.value = "Prompt sharpened by Aura AI"
+                }
+                .onFailure { err ->
+                    _bannerMessage.value = err.message ?: "Could not enhance prompt."
+                }
+            _isEnhancingPrompt.value = false
+        }
+    }
+
+    fun applySlashCommand(command: SlashCommand) {
+        val current = _composerText.value.trim()
+        val remainder = if (current.startsWith("/")) {
+            val firstSpace = current.indexOf(' ')
+            if (firstSpace == -1) "" else current.substring(firstSpace + 1).trimStart()
+        } else {
+            current
+        }
+        _composerText.value = if (remainder.isNotBlank()) {
+            "${command.promptPrefix}$remainder"
+        } else {
+            command.promptPrefix
+        }
+        viewModelScope.launch {
+            prefs.setDefaultCapability(command.suggestedMode)
+            if (command.requiresWeb) {
+                prefs.setWebSearchEnabled(true)
+                prefs.setCodeExecutionEnabled(false)
+            } else if (command.requiresSandbox) {
+                prefs.setCodeExecutionEnabled(true)
+                prefs.setWebSearchEnabled(false)
+            }
+        }
+    }
+
+    fun buildExportMarkdown(messages: List<MessageEntity>): String {
+        val sb = StringBuilder()
+        sb.append("# Aura AI · Abhynex Export\n\n")
+        messages.forEach { msg ->
+            if (msg.role == "user") {
+                sb.append("## You\n${msg.content}\n\n")
+            } else {
+                sb.append("### Aura AI\n")
+                if (!msg.thinkingContent.isNullOrBlank()) {
+                    sb.append("<details>\n<summary>Reasoning</summary>\n\n${msg.thinkingContent}\n\n</details>\n\n")
+                }
+                sb.append("${msg.content}\n\n---\n\n")
+            }
+        }
+        return sb.toString().trim()
     }
 
     fun selectPersona(persona: PersonaEntity) {
@@ -425,8 +581,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             thinkingText = "",
             thinkingDurationMs = 0L,
             contentText = "",
-            modelDisplayName = model.displayName,
-            isThinkingPhase = !model.isImageModel && capability == CapabilityMode.DEEP_THINK,
+            modelDisplayName = "Aura AI",
+            isThinkingPhase = !model.isImageModel && (
+                capability == CapabilityMode.DEEP_THINK || capability == CapabilityMode.CODE_ARCHITECT
+            ),
             isGeneratingImage = model.isImageModel
         )
 
@@ -439,54 +597,77 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             attachmentUri = attachment?.uri,
             attachmentName = attachment?.displayName,
             attachmentIsImage = attachment?.isImage ?: false,
-            attachmentTextSnippet = attachment?.textSnippet
+            attachmentTextSnippet = attachment?.textSnippet,
+            useWebSearch = webSearchEnabled.value && !model.isImageModel,
+            useCodeExecution = codeExecutionEnabled.value && !model.isImageModel
         )
 
-        aiRepository.streamResponse(request).collect { event ->
-            val current = _streamingState.value ?: return@collect
-            when (event) {
-                is AiStreamEvent.ThinkingChunk -> {
-                    _streamingState.value = current.copy(
-                        thinkingText = event.thinkingText,
-                        thinkingDurationMs = event.elapsedMs,
-                        isThinkingPhase = true
-                    )
+        try {
+            aiRepository.streamResponse(request).collect { event ->
+                val current = _streamingState.value ?: return@collect
+                when (event) {
+                    is AiStreamEvent.ThinkingChunk -> {
+                        _streamingState.value = current.copy(
+                            thinkingText = event.thinkingText,
+                            thinkingDurationMs = event.elapsedMs,
+                            isThinkingPhase = true
+                        )
+                    }
+                    is AiStreamEvent.ContentChunk -> {
+                        _streamingState.value = current.copy(
+                            contentText = event.accumulatedText,
+                            isThinkingPhase = false
+                        )
+                    }
+                    is AiStreamEvent.Completed -> {
+                        val saved = MessageEntity(
+                            id = assistantMsgId,
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = event.fullText,
+                            thinkingContent = event.thinkingText,
+                            thinkingDurationMs = event.thinkingDurationMs,
+                            modelDisplayName = "Aura AI",
+                            generatedImagePath = event.generatedImagePath,
+                            sourcesJson = serializeSources(event.sources),
+                            isError = false,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        _streamingState.value = null
+                        chatRepository.saveMessage(saved)
+                    }
+                    is AiStreamEvent.Failed -> {
+                        val errorMsg = MessageEntity(
+                            id = assistantMsgId,
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = event.errorMessage,
+                            modelDisplayName = "Aura AI",
+                            isError = true,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        _streamingState.value = null
+                        chatRepository.saveMessage(errorMsg)
+                    }
                 }
-                is AiStreamEvent.ContentChunk -> {
-                    _streamingState.value = current.copy(
-                        contentText = event.accumulatedText,
-                        isThinkingPhase = false
-                    )
-                }
-                is AiStreamEvent.Completed -> {
-                    val saved = MessageEntity(
-                        id = assistantMsgId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = event.fullText,
-                        thinkingContent = event.thinkingText,
-                        thinkingDurationMs = event.thinkingDurationMs,
-                        modelDisplayName = model.displayName,
-                        generatedImagePath = event.generatedImagePath,
-                        isError = false,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    _streamingState.value = null
-                    chatRepository.saveMessage(saved)
-                }
-                is AiStreamEvent.Failed -> {
-                    val errorMsg = MessageEntity(
-                        id = assistantMsgId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = event.errorMessage,
-                        modelDisplayName = model.displayName,
-                        isError = true,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    _streamingState.value = null
-                    chatRepository.saveMessage(errorMsg)
-                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            val errorMsg = MessageEntity(
+                id = assistantMsgId,
+                conversationId = conversationId,
+                role = "assistant",
+                content = t.localizedMessage ?: "Aura AI could not respond. Please retry.",
+                modelDisplayName = "Aura AI",
+                isError = true,
+                timestamp = System.currentTimeMillis()
+            )
+            _streamingState.value = null
+            chatRepository.saveMessage(errorMsg)
+        } finally {
+            if (_streamingState.value?.messageId == assistantMsgId) {
+                _streamingState.value = null
             }
         }
     }
@@ -607,6 +788,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        liveVoiceJob?.cancel()
         tts?.stop()
         tts?.shutdown()
     }

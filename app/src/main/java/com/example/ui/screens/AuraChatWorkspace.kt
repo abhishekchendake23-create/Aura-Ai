@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,10 +28,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,6 +44,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDrawerState
@@ -52,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -76,6 +83,8 @@ fun AuraAppRoot(viewModel: ChatViewModel) {
     val personas by viewModel.personas.collectAsStateWithLifecycle()
     val activePersonaId by viewModel.activePersonaId.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarkedMessages.collectAsStateWithLifecycle()
+    val selectedVoice by viewModel.selectedVoice.collectAsStateWithLifecycle()
+    val liveVoiceStatus by viewModel.liveVoiceStatus.collectAsStateWithLifecycle()
 
     when (destination) {
         AppDestination.Chat -> {
@@ -102,6 +111,16 @@ fun AuraAppRoot(viewModel: ChatViewModel) {
                 onBack = { viewModel.navigateTo(AppDestination.Chat) }
             )
         }
+        AppDestination.LiveVoice -> {
+            LiveVoiceScreen(
+                selectedVoice = selectedVoice,
+                status = liveVoiceStatus,
+                onStartVoice = { viewModel.startLiveVoice() },
+                onStopVoice = { viewModel.stopLiveVoice() },
+                onSelectVoice = { viewModel.selectVoiceCharacter(it) },
+                onBack = { viewModel.navigateTo(AppDestination.Chat) }
+            )
+        }
     }
 }
 
@@ -121,6 +140,9 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val attachmentDraft by viewModel.attachmentDraft.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     val selectedCapability by viewModel.selectedCapability.collectAsStateWithLifecycle()
+    val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
+    val codeExecutionEnabled by viewModel.codeExecutionEnabled.collectAsStateWithLifecycle()
+    val isEnhancingPrompt by viewModel.isEnhancingPrompt.collectAsStateWithLifecycle()
     val personas by viewModel.personas.collectAsStateWithLifecycle()
     val activePersona by viewModel.activePersona.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -131,6 +153,13 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
 
     var showModelSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var isInChatSearchOpen by remember { mutableStateOf(false) }
+    var inChatQuery by remember { mutableStateOf("") }
+
+    LaunchedEffect(activeConversationId) {
+        isInChatSearchOpen = false
+        inChatQuery = ""
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -169,10 +198,14 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         }
     }
 
-    LaunchedEffect(messages.size, streamingState?.contentText?.length) {
-        val total = messages.size + if (streamingState != null) 1 else 0
-        if (total > 0) {
-            listState.animateScrollToItem(total - 1)
+    LaunchedEffect(
+        messages.size,
+        streamingState?.contentText?.length,
+        streamingState?.thinkingText?.length
+    ) {
+        val lastItemIndex = messages.size + if (streamingState != null) 1 else 0
+        if (messages.isNotEmpty() || streamingState != null) {
+            listState.animateScrollToItem(lastItemIndex)
         }
     }
 
@@ -204,6 +237,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     scope.launch { drawerState.close() }
                     viewModel.navigateTo(AppDestination.SavedLibrary)
                 },
+                onOpenLiveVoice = {
+                    scope.launch { drawerState.close() }
+                    viewModel.navigateTo(AppDestination.LiveVoice)
+                },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     showSettingsSheet = true
@@ -216,12 +253,111 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             topBar = {
-                GeminiTopBar(
-                    modelShortName = selectedModel.shortName,
-                    onOpenDrawer = { scope.launch { drawerState.open() } },
-                    onOpenModelSelector = { showModelSheet = true },
-                    onNewChat = { viewModel.startNewChat() }
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    AuraTopBar(
+                        modelShortName = selectedModel.shortName,
+                        hasMessages = messages.isNotEmpty(),
+                        isSearchOpen = isInChatSearchOpen,
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        onOpenModelSelector = { showModelSheet = true },
+                        onToggleSearch = {
+                            isInChatSearchOpen = !isInChatSearchOpen
+                            if (!isInChatSearchOpen) inChatQuery = ""
+                        },
+                        onExportThread = {
+                            val md = viewModel.buildExportMarkdown(messages)
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "Aura AI Thread Export")
+                                putExtra(Intent.EXTRA_TEXT, md)
+                            }
+                            context.startActivity(
+                                Intent.createChooser(shareIntent, "Export Aura AI Thread (.md)")
+                            )
+                        },
+                        onNewChat = { viewModel.startNewChat() }
+                    )
+
+                    AnimatedVisibility(visible = isInChatSearchOpen && messages.isNotEmpty()) {
+                        val trimmedQuery = inChatQuery.trim()
+                        val matchCount = remember(messages, trimmedQuery) {
+                            if (trimmedQuery.isEmpty()) messages.size
+                            else messages.count { it.content.contains(trimmedQuery, ignoreCase = true) }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Box(modifier = Modifier.weight(1f)) {
+                                    if (inChatQuery.isEmpty()) {
+                                        Text(
+                                            text = "Search in this chat...",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    BasicTextField(
+                                        value = inChatQuery,
+                                        onValueChange = { inChatQuery = it },
+                                        singleLine = true,
+                                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        ),
+                                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("in_chat_search_input")
+                                    )
+                                }
+                                if (trimmedQuery.isNotEmpty()) {
+                                    Text(
+                                        text = "$matchCount",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (inChatQuery.isNotEmpty()) {
+                                            inChatQuery = ""
+                                        } else {
+                                            isInChatSearchOpen = false
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Close search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             },
             bottomBar = {
                 ComposerBar(
@@ -230,10 +366,17 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     selectedModel = selectedModel,
                     selectedCapability = selectedCapability,
                     activePersona = activePersona,
+                    webSearchEnabled = webSearchEnabled,
+                    codeExecutionEnabled = codeExecutionEnabled,
+                    isEnhancingPrompt = isEnhancingPrompt,
                     isStreaming = streamingState != null,
                     onTextChange = { viewModel.updateComposerText(it) },
                     onSelectModel = { viewModel.selectModel(it) },
                     onSelectCapability = { viewModel.selectCapability(it) },
+                    onToggleWebSearch = { viewModel.toggleWebSearch() },
+                    onToggleCodeExecution = { viewModel.toggleCodeExecution() },
+                    onEnhancePrompt = { viewModel.enhanceComposerPrompt() },
+                    onApplySlashCommand = { viewModel.applySlashCommand(it) },
                     onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
                     onPickImage = {
                         photoPickerLauncher.launch(
@@ -250,12 +393,13 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
                             )
                             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Gemini")
+                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Aura AI")
                         }
                         runCatching { voiceLauncher.launch(intent) }.onFailure {
                             viewModel.showToastMessage("Voice input is unavailable on this device")
                         }
                     },
+                    onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) },
                     onClearAttachment = { viewModel.clearAttachment() },
                     onSend = { viewModel.sendPrompt() },
                     onStop = { viewModel.stopGeneration() }
@@ -273,8 +417,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         selectedModel = selectedModel,
                         personas = personas,
                         activePersona = activePersona,
+                        webSearchEnabled = webSearchEnabled,
+                        codeExecutionEnabled = codeExecutionEnabled,
                         onSelectModel = { viewModel.selectModel(it) },
                         onSelectPersona = { viewModel.selectPersona(it) },
+                        onToggleWebSearch = { viewModel.toggleWebSearch() },
+                        onToggleCodeExecution = { viewModel.toggleCodeExecution() },
                         onStarterSelected = { starter ->
                             viewModel.sendPrompt(
                                 overridePrompt = starter.prompt,
@@ -282,9 +430,18 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                 overrideMode = starter.suggestedMode
                             )
                         },
-                        onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) }
+                        onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
+                        onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) }
                     )
                 } else {
+                    val lastAssistantId = remember(messages) {
+                        messages.lastOrNull { it.role == "assistant" }?.id
+                    }
+                    val visibleMessages = remember(messages, isInChatSearchOpen, inChatQuery) {
+                        val q = inChatQuery.trim()
+                        if (!isInChatSearchOpen || q.isEmpty()) messages
+                        else messages.filter { it.content.contains(q, ignoreCase = true) }
+                    }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
@@ -292,18 +449,22 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                             .fillMaxSize(),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp)
                     ) {
-                        items(messages, key = { it.id }) { msg ->
+                        items(visibleMessages, key = { it.id }) { msg ->
                             if (msg.role == "user") {
                                 UserMessageBubble(message = msg)
                             } else {
                                 AssistantMessageBlock(
                                     message = msg,
                                     isSpeaking = speakingMessageId == msg.id,
+                                    isLatestAssistantMessage = streamingState == null && msg.id == lastAssistantId,
                                     onToggleSpeak = { viewModel.toggleSpeakMessage(msg) },
                                     onRegenerate = { viewModel.regenerateResponse(msg) },
                                     onToggleBookmark = { viewModel.toggleBookmark(msg) },
                                     onEditGeneratedImage = { path ->
                                         viewModel.attachGeneratedImageForEdit(path)
+                                    },
+                                    onFollowUpPrompt = { followUp ->
+                                        viewModel.sendPrompt(overridePrompt = followUp)
                                     },
                                     onShare = {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -311,7 +472,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                             putExtra(Intent.EXTRA_TEXT, msg.content)
                                         }
                                         context.startActivity(
-                                            Intent.createChooser(shareIntent, "Share Gemini Response")
+                                            Intent.createChooser(shareIntent, "Share Aura AI Response")
                                         )
                                     }
                                 )
@@ -352,10 +513,14 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
 }
 
 @Composable
-private fun GeminiTopBar(
+private fun AuraTopBar(
     modelShortName: String,
+    hasMessages: Boolean,
+    isSearchOpen: Boolean,
     onOpenDrawer: () -> Unit,
     onOpenModelSelector: () -> Unit,
+    onToggleSearch: () -> Unit,
+    onExportThread: () -> Unit,
     onNewChat: () -> Unit
 ) {
     Row(
@@ -380,7 +545,7 @@ private fun GeminiTopBar(
             )
         }
 
-        // Clean Gemini-style Model Selector Pill
+        // Clean AMOLED Aura AI Mode Selector Pill
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(22.dp))
@@ -404,23 +569,54 @@ private fun GeminiTopBar(
             )
             Icon(
                 imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = "Switch Gemini model",
+                contentDescription = "Switch Aura AI mode",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp)
             )
         }
 
-        IconButton(
-            onClick = onNewChat,
-            modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .testTag("top_new_chat_button")
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.EditNote,
-                contentDescription = stringResource(R.string.cd_new_chat),
-                tint = MaterialTheme.colorScheme.onSurface
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (hasMessages) {
+                IconButton(
+                    onClick = onToggleSearch,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("chat_search_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "Search messages in chat",
+                        tint = if (isSearchOpen) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onExportThread,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("export_thread_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.IosShare,
+                        contentDescription = "Export chat thread as Markdown",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            IconButton(
+                onClick = onNewChat,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("top_new_chat_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.EditNote,
+                    contentDescription = stringResource(R.string.cd_new_chat),
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }

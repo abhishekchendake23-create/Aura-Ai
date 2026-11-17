@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -11,13 +13,19 @@ import androidx.room.RoomDatabase
         MessageEntity::class,
         PersonaEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AuraDatabase : RoomDatabase() {
     abstract fun auraDao(): AuraDao
 
     companion object {
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN sourcesJson TEXT")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AuraDatabase? = null
 
@@ -28,6 +36,7 @@ abstract class AuraDatabase : RoomDatabase() {
                     AuraDatabase::class.java,
                     "aura_workspace.db"
                 )
+                    .addMigrations(MIGRATION_2_3)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

@@ -273,7 +273,7 @@ private fun CreatePersonaDialog(
     var systemPrompt by remember { mutableStateOf("") }
     var selectedIcon by remember { mutableStateOf("sparkle") }
 
-    val iconOptions = listOf("sparkle", "code", "analytics", "edit", "school")
+    val iconOptions = listOf("sparkle", "code", "bug", "math", "search", "edit")
 
     AlertDialog(
         onDismissRequest = onDismiss,

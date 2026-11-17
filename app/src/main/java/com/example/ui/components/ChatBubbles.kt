@@ -9,6 +9,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +21,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.rounded.AutoFixHigh
@@ -29,6 +33,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.StopCircle
@@ -53,6 +58,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -61,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.MessageEntity
+import com.example.data.repository.parseSources
 import com.example.ui.StreamingMessageState
 import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.delay
@@ -153,15 +160,19 @@ fun UserMessageBubble(
 fun AssistantMessageBlock(
     message: MessageEntity,
     isSpeaking: Boolean,
+    isLatestAssistantMessage: Boolean = false,
     onToggleSpeak: () -> Unit,
     onRegenerate: () -> Unit,
     onToggleBookmark: () -> Unit,
     onEditGeneratedImage: (String) -> Unit,
+    onFollowUpPrompt: (String) -> Unit = {},
     onShare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val auraColors = LocalAuraColors.current
     val clipboard = LocalClipboardManager.current
+    val uriHandler = LocalUriHandler.current
+    val sources = remember(message.sourcesJson) { parseSources(message.sourcesJson) }
     var copied by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
@@ -206,13 +217,23 @@ fun AssistantMessageBlock(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "Gemini Request Failed",
+                            text = "Aura AI Request Failed",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     }
+                    val safeErrorText = remember(message.content) {
+                        message.content
+                            .replace(Regex("https?://\\S+"), "")
+                            .replace(Regex("gemini[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("generativelanguage\\.googleapis\\.com\\S*", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("google", RegexOption.IGNORE_CASE), "Abhynex")
+                            .replace(Regex("\\s+"), " ")
+                            .trim()
+                            .ifBlank { "Aura AI request could not complete. Please tap Retry." }
+                    }
                     Text(
-                        text = message.content,
+                        text = safeErrorText,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -274,7 +295,7 @@ fun AssistantMessageBlock(
                                 .padding(end = 6.dp)
                                 .size(16.dp)
                         )
-                        Text("Edit with Nano Banana")
+                        Text("Edit with Aura Imagine")
                     }
                 }
             }
@@ -282,6 +303,66 @@ fun AssistantMessageBlock(
 
         if (message.content.isNotBlank()) {
             MarkdownRenderer(markdown = message.content)
+        }
+
+        if (sources.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "SOURCES",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    sources.forEach { source ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable {
+                                    runCatching { uriHandler.openUri(source.uri) }
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Public,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = source.title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 160.dp)
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                    contentDescription = "Open web source",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Row(
@@ -366,6 +447,60 @@ fun AssistantMessageBlock(
                 )
             }
         }
+
+        if (isLatestAssistantMessage && message.content.isNotBlank() && message.generatedImagePath.isNullOrBlank()) {
+            val followUps = remember(message.id, message.content) {
+                buildSmartFollowUps(message.content)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                followUps.forEach { (label, prompt) ->
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(18.dp)
+                            )
+                            .clickable { onFollowUpPrompt(prompt) }
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun buildSmartFollowUps(content: String): List<Pair<String, String>> {
+    return when {
+        content.contains("```") -> listOf(
+            "Find Bugs & Fix" to "Critically audit the code above for any bugs, edge cases, race conditions, or crashes, and provide the hardened drop-in fix.",
+            "Optimize" to "Optimize the code above for cleaner architecture, performance, and lower memory overhead.",
+            "Write Unit Tests" to "Write comprehensive unit tests covering normal flows, edge cases, and error paths for the code above."
+        )
+        content.contains("$$") || content.contains("\\boxed") || content.contains("\\frac") || content.contains("\\int") -> listOf(
+            "Verify Steps" to "Double-check every derivation step above and verify the final answer with an independent sanity check.",
+            "Simpler Way" to "Explain an alternative or quicker intuition to solve this problem.",
+            "Harder Problem" to "Give me a harder Olympiad/JEE Advanced problem on this same concept and solve it step-by-step."
+        )
+        else -> listOf(
+            "Go Deeper" to "Go deeper with concrete technical details, trade-offs, and practical examples.",
+            "Summarize" to "Summarize the core answer into crisp, actionable bullet points.",
+            "Practical Example" to "Give a clear real-world example applying what you explained."
+        )
     }
 }
 
@@ -418,7 +553,7 @@ fun StreamingAssistantBlock(
                         modifier = Modifier.size(32.dp)
                     )
                     Text(
-                        text = "Creating image with ${streaming.modelDisplayName}…\n(may take 30–60s)",
+                        text = "Creating image with Aura Imagine…\n(may take 30–60s)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -446,7 +581,7 @@ fun StreamingAssistantBlock(
                 modifier = Modifier.alpha(pulseAlpha)
             ) {
                 Text(
-                    text = "Gemini is responding…",
+                    text = "Aura AI is thinking…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -466,9 +601,21 @@ private fun AssistantHeaderRow(
     ) {
         GeminiSparkleIcon(size = 22.dp, animate = isStreaming)
         Text(
-            text = modelName.ifBlank { "Gemini" },
+            text = "Aura AI",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface
         )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = "Abhynex",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

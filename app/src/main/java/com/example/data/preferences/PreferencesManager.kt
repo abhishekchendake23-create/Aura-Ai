@@ -3,10 +3,13 @@ package com.example.data.preferences
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.data.model.ALL_30_VOICE_CHARACTERS
 import com.example.data.model.AiModelTier
+import com.example.data.model.AuraVoiceCharacter
 import com.example.data.model.CapabilityMode
 import com.example.data.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +23,9 @@ class PreferencesManager(private val context: Context) {
         val DEFAULT_MODEL = stringPreferencesKey("default_model")
         val DEFAULT_CAPABILITY = stringPreferencesKey("default_capability")
         val ACTIVE_PERSONA = stringPreferencesKey("active_persona")
+        val VOICE_CHARACTER = stringPreferencesKey("voice_character")
+        val WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
+        val CODE_EXECUTION_ENABLED = booleanPreferencesKey("code_execution_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.auraDataStore.data.map { prefs ->
@@ -42,6 +48,19 @@ class PreferencesManager(private val context: Context) {
         prefs[Keys.ACTIVE_PERSONA] ?: "persona_general"
     }
 
+    val voiceCharacter: Flow<AuraVoiceCharacter> = context.auraDataStore.data.map { prefs ->
+        val name = prefs[Keys.VOICE_CHARACTER] ?: "Zephyr"
+        ALL_30_VOICE_CHARACTERS.find { it.apiName == name } ?: ALL_30_VOICE_CHARACTERS.first()
+    }
+
+    val webSearchEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.WEB_SEARCH_ENABLED] ?: false
+    }
+
+    val codeExecutionEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.CODE_EXECUTION_ENABLED] ?: false
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) {
         context.auraDataStore.edit { it[Keys.THEME_MODE] = mode.name }
     }
@@ -56,5 +75,17 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setActivePersonaId(personaId: String) {
         context.auraDataStore.edit { it[Keys.ACTIVE_PERSONA] = personaId }
+    }
+
+    suspend fun setVoiceCharacter(apiName: String) {
+        context.auraDataStore.edit { it[Keys.VOICE_CHARACTER] = apiName }
+    }
+
+    suspend fun setWebSearchEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.WEB_SEARCH_ENABLED] = enabled }
+    }
+
+    suspend fun setCodeExecutionEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.CODE_EXECUTION_ENABLED] = enabled }
     }
 }

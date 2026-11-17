@@ -1,10 +1,12 @@
 <resources>
     <string name="app_name">Aura AI</string>
+    <string name="brand_maker">Abhynex</string>
     <string name="cd_open_drawer">Open conversations drawer</string>
     <string name="cd_new_chat">Start new chat</string>
     <string name="cd_attach_photo">Attach photo</string>
     <string name="cd_attach_file">Attach text document</string>
-    <string name="cd_voice_input">Voice input</string>
+    <string name="cd_voice_input">Voice dictation</string>
+    <string name="cd_live_voice">Start Aura Live Voice</string>
     <string name="cd_send_message">Send message</string>
     <string name="cd_stop_generation">Stop generating</string>
     <string name="cd_copy_text">Copy message</string>
@@ -14,6 +16,6 @@
     <string name="cd_regenerate">Regenerate response</string>
     <string name="cd_bookmark">Save to library</string>
     <string name="cd_share">Share response</string>
-    <string name="composer_placeholder">Ask Gemini...</string>
-    <string name="composer_image_placeholder">Describe the image to create or edit...</string>
+    <string name="composer_placeholder">Ask Aura AI...</string>
+    <string name="composer_image_placeholder">Describe the image to create with Aura AI...</string>
 </resources>
