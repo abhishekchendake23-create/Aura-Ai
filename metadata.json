@@ -1,0 +1,6 @@
+{
+  "name": "Aura AI",
+  "description": "A powerful multimodal AI assistant with streaming responses, code and markdown rendering, model selection, custom personas, and synced cloud chat history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
