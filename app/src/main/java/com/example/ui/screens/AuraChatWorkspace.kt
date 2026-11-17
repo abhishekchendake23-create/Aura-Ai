@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.IosShare
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
@@ -149,6 +150,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val speakingMessageId by viewModel.speakingMessageId.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarkedMessages.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val savedUserApiKey by viewModel.savedUserApiKey.collectAsStateWithLifecycle()
+    val hasEffectiveApiKey by viewModel.hasEffectiveApiKey.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
 
     var showModelSheet by remember { mutableStateOf(false) }
@@ -258,8 +261,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         modelShortName = selectedModel.shortName,
                         hasMessages = messages.isNotEmpty(),
                         isSearchOpen = isInChatSearchOpen,
+                        hasEffectiveApiKey = hasEffectiveApiKey,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenModelSelector = { showModelSheet = true },
+                        onOpenApiKeySettings = { showSettingsSheet = true },
                         onToggleSearch = {
                             isInChatSearchOpen = !isInChatSearchOpen
                             if (!isInChatSearchOpen) inChatQuery = ""
@@ -419,10 +424,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         activePersona = activePersona,
                         webSearchEnabled = webSearchEnabled,
                         codeExecutionEnabled = codeExecutionEnabled,
+                        hasEffectiveApiKey = hasEffectiveApiKey,
                         onSelectModel = { viewModel.selectModel(it) },
                         onSelectPersona = { viewModel.selectPersona(it) },
                         onToggleWebSearch = { viewModel.toggleWebSearch() },
                         onToggleCodeExecution = { viewModel.toggleCodeExecution() },
+                        onOpenApiKeySettings = { showSettingsSheet = true },
                         onStarterSelected = { starter ->
                             viewModel.sendPrompt(
                                 overridePrompt = starter.prompt,
@@ -505,7 +512,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     if (showSettingsSheet) {
         SettingsSheet(
             themeMode = themeMode,
+            savedApiKey = savedUserApiKey,
+            hasEffectiveApiKey = hasEffectiveApiKey,
             onSelectTheme = { viewModel.setThemeMode(it) },
+            onSaveApiKey = { viewModel.saveApiKey(it) },
             onClearAllHistory = { viewModel.clearAllHistory() },
             onDismiss = { showSettingsSheet = false }
         )
@@ -517,8 +527,10 @@ private fun AuraTopBar(
     modelShortName: String,
     hasMessages: Boolean,
     isSearchOpen: Boolean,
+    hasEffectiveApiKey: Boolean,
     onOpenDrawer: () -> Unit,
     onOpenModelSelector: () -> Unit,
+    onOpenApiKeySettings: () -> Unit,
     onToggleSearch: () -> Unit,
     onExportThread: () -> Unit,
     onNewChat: () -> Unit
@@ -576,6 +588,20 @@ private fun AuraTopBar(
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = onOpenApiKeySettings,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("top_api_key_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Key,
+                    contentDescription = "Manage API Key",
+                    tint = if (hasEffectiveApiKey) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
             if (hasMessages) {
                 IconButton(
                     onClick = onToggleSearch,

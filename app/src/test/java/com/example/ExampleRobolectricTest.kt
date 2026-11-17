@@ -112,4 +112,17 @@ class ExampleRobolectricTest {
         assertTrue(triggers.containsAll(listOf("/arch", "/debug", "/sandbox", "/math", "/tests", "/web")))
         assertTrue(com.example.data.model.AURA_SLASH_COMMANDS.all { it.trigger.startsWith("/") })
     }
+
+    @Test
+    fun `in-app user API key saves, persists, and clears cleanly`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.preferences.PreferencesManager(context)
+
+        prefs.setUserApiKey("  test-user-key-12345  ")
+        assertEquals("test-user-key-12345", prefs.userApiKey.first())
+        assertEquals("test-user-key-12345", prefs.getEffectiveApiKey())
+
+        prefs.setUserApiKey("")
+        assertEquals("", prefs.userApiKey.first())
+    }
 }

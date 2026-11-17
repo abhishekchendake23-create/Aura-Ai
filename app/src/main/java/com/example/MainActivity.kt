@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.ai.configureAppCheck
 import com.example.ui.ChatViewModel
 import com.example.ui.screens.AuraAppRoot
 import com.example.ui.theme.AuraTheme
@@ -16,9 +15,6 @@ import com.example.ui.theme.AuraTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Configure Firebase App Check with launch intent before any UI or ViewModel creation.
-        configureAppCheck(this, intent)
 
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),

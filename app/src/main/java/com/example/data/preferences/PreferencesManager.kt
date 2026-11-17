@@ -7,12 +7,14 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.BuildConfig
 import com.example.data.model.ALL_30_VOICE_CHARACTERS
 import com.example.data.model.AiModelTier
 import com.example.data.model.AuraVoiceCharacter
 import com.example.data.model.CapabilityMode
 import com.example.data.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.auraDataStore: DataStore<Preferences> by preferencesDataStore(name = "aura_prefs")
@@ -26,6 +28,7 @@ class PreferencesManager(private val context: Context) {
         val VOICE_CHARACTER = stringPreferencesKey("voice_character")
         val WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
         val CODE_EXECUTION_ENABLED = booleanPreferencesKey("code_execution_enabled")
+        val USER_API_KEY = stringPreferencesKey("user_api_key")
     }
 
     val themeMode: Flow<ThemeMode> = context.auraDataStore.data.map { prefs ->
@@ -61,6 +64,27 @@ class PreferencesManager(private val context: Context) {
         prefs[Keys.CODE_EXECUTION_ENABLED] ?: false
     }
 
+    val userApiKey: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.USER_API_KEY]?.trim().orEmpty()
+    }
+
+    suspend fun getEffectiveApiKey(): String {
+        val saved = userApiKey.first()
+        if (saved.isNotBlank()) return saved
+        return resolveBuildConfigApiKey()
+    }
+
+    suspend fun setUserApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        context.auraDataStore.edit { prefs ->
+            if (cleaned.isEmpty()) {
+                prefs.remove(Keys.USER_API_KEY)
+            } else {
+                prefs[Keys.USER_API_KEY] = cleaned
+            }
+        }
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) {
         context.auraDataStore.edit { it[Keys.THEME_MODE] = mode.name }
     }
@@ -87,5 +111,15 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setCodeExecutionEnabled(enabled: Boolean) {
         context.auraDataStore.edit { it[Keys.CODE_EXECUTION_ENABLED] = enabled }
+    }
+
+    companion object {
+        fun resolveBuildConfigApiKey(): String {
+            val builtIn = BuildConfig.GEMINI_API_KEY.trim()
+            return if (builtIn.isBlank() ||
+                builtIn == "YOUR_GEMINI_API_KEY" ||
+                builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
+            ) "" else builtIn
+        }
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Functions
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
@@ -67,10 +68,12 @@ fun WelcomeEmptyState(
     activePersona: PersonaEntity?,
     webSearchEnabled: Boolean = false,
     codeExecutionEnabled: Boolean = false,
+    hasEffectiveApiKey: Boolean = true,
     onSelectModel: (AiModelTier) -> Unit,
     onSelectPersona: (PersonaEntity) -> Unit,
     onToggleWebSearch: () -> Unit = {},
     onToggleCodeExecution: () -> Unit = {},
+    onOpenApiKeySettings: () -> Unit = {},
     onStarterSelected: (PromptStarter) -> Unit,
     onOpenPersonaStudio: () -> Unit,
     onOpenLiveVoice: () -> Unit,
@@ -153,6 +156,63 @@ fun WelcomeEmptyState(
             )
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (!hasEffectiveApiKey) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(18.dp)
+                        )
+                        .clickable(onClick = onOpenApiKeySettings)
+                        .testTag("welcome_add_api_key_card")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.errorContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Key,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Add & Save API Key",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tap here to paste & save your key inside the app",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
 
             // Real-time Aura Live Voice Launch Card (30 Characters)
             Surface(

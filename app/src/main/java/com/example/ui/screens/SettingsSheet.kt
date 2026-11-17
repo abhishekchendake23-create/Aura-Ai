@@ -4,31 +4,44 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +50,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.data.model.ThemeMode
 import com.example.ui.theme.LocalAuraColors
@@ -45,21 +60,36 @@ import com.example.ui.theme.LocalAuraColors
 @Composable
 fun SettingsSheet(
     themeMode: ThemeMode,
+    savedApiKey: String,
+    hasEffectiveApiKey: Boolean,
     onSelectTheme: (ThemeMode) -> Unit,
+    onSaveApiKey: (String) -> Unit,
     onClearAllHistory: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val auraColors = LocalAuraColors.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showClearConfirm by remember { mutableStateOf(false) }
+    var apiKeyInput by remember(savedApiKey) { mutableStateOf(savedApiKey) }
+    var revealKey by remember { mutableStateOf(false) }
+
+    LaunchedEffect(savedApiKey) {
+        if (apiKeyInput.isBlank() && savedApiKey.isNotBlank()) {
+            apiKeyInput = savedApiKey
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -68,6 +98,151 @@ fun SettingsSheet(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
+
+            // In-App API Key Configuration & Persistence
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(
+                        width = 1.dp,
+                        color = if (hasEffectiveApiKey) auraColors.emerald.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Key,
+                            contentDescription = null,
+                            tint = if (hasEffectiveApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "API Key",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (hasEffectiveApiKey) auraColors.emeraldContainer
+                                else MaterialTheme.colorScheme.errorContainer
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                savedApiKey.isNotBlank() -> "Saved on Device"
+                                hasEffectiveApiKey -> "Built-in Ready"
+                                else -> "Not Set"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (hasEffectiveApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Paste your API key below and tap Save. It is stored locally on your phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = apiKeyInput,
+                    onValueChange = { apiKeyInput = it },
+                    singleLine = true,
+                    placeholder = { Text("Paste API key...") },
+                    visualTransformation = if (revealKey) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row {
+                            if (apiKeyInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { apiKeyInput = "" },
+                                    modifier = Modifier.testTag("clear_api_key_input")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear input",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { revealKey = !revealKey },
+                                modifier = Modifier.testTag("toggle_reveal_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = if (revealKey) Icons.Rounded.VisibilityOff
+                                    else Icons.Rounded.Visibility,
+                                    contentDescription = if (revealKey) "Hide API key" else "Show API key",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("api_key_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSaveApiKey(apiKeyInput)
+                            onDismiss()
+                        },
+                        enabled = apiKeyInput.isNotBlank() && apiKeyInput.trim() != savedApiKey,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_api_key_button")
+                    ) {
+                        Text(
+                            if (savedApiKey.isNotBlank() && apiKeyInput.trim() == savedApiKey) "Saved"
+                            else "Save Key"
+                        )
+                    }
+
+                    if (savedApiKey.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                apiKeyInput = ""
+                                onSaveApiKey("")
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.testTag("remove_saved_api_key_button")
+                        ) {
+                            Text("Remove")
+                        }
+                    }
+                }
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(

@@ -23,7 +23,7 @@ import com.example.data.repository.AiRepository
 import com.example.data.repository.AiRequest
 import com.example.data.repository.AiStreamEvent
 import com.example.data.repository.ChatRepository
-import com.example.data.repository.FirebaseAiRepository
+import com.example.data.repository.DirectGeminiAiRepository
 import com.example.data.repository.LiveVoiceManager
 import com.example.data.repository.LiveVoiceStatus
 import com.example.data.repository.serializeSources
@@ -67,8 +67,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AuraDatabase.getInstance(application)
     private val chatRepository = ChatRepository(database.auraDao())
-    private val aiRepository: AiRepository = FirebaseAiRepository(application.applicationContext)
-    private val liveVoiceManager = LiveVoiceManager()
+    private val aiRepository: AiRepository = DirectGeminiAiRepository(application.applicationContext)
+    private val liveVoiceManager = LiveVoiceManager(application.applicationContext)
     private val prefs = PreferencesManager(application)
 
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Chat)
@@ -146,6 +146,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = ALL_30_VOICE_CHARACTERS.first()
+    )
+
+    val savedUserApiKey: StateFlow<String> = prefs.userApiKey.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ""
+    )
+
+    val hasEffectiveApiKey: StateFlow<Boolean> = combine(prefs.userApiKey) { values ->
+        values[0].isNotBlank() || PreferencesManager.resolveBuildConfigApiKey().isNotBlank()
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = PreferencesManager.resolveBuildConfigApiKey().isNotBlank()
     )
 
     val personas: StateFlow<List<PersonaEntity>> = chatRepository.observePersonas().stateIn(
@@ -280,6 +294,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { prefs.setThemeMode(mode) }
+    }
+
+    fun saveApiKey(rawKey: String) {
+        viewModelScope.launch {
+            val cleaned = rawKey.trim()
+            prefs.setUserApiKey(cleaned)
+            _bannerMessage.value = if (cleaned.isNotBlank()) {
+                "API Key saved on device"
+            } else {
+                "Saved API Key cleared"
+            }
+        }
     }
 
     fun selectModel(model: AiModelTier) {

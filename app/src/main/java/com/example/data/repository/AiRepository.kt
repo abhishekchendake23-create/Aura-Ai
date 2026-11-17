@@ -4,41 +4,43 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.local.MessageEntity
 import com.example.data.local.PersonaEntity
 import com.example.data.model.AiModelTier
 import com.example.data.model.CapabilityMode
-import com.google.firebase.Firebase
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.CodeExecutionResultPart
-import com.google.firebase.ai.type.Content
-import com.google.firebase.ai.type.ExecutableCodePart
-import com.google.firebase.ai.type.GenerativeBackend
-import com.google.firebase.ai.type.ImagePart
-import com.google.firebase.ai.type.ResponseModality
-import com.google.firebase.ai.type.TextPart
-import com.google.firebase.ai.type.ThinkingLevel
-import com.google.firebase.ai.type.Tool
-import com.google.firebase.ai.type.content
-import com.google.firebase.ai.type.generationConfig
-import com.google.firebase.ai.type.thinkingConfig
+import com.example.data.preferences.PreferencesManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import okhttp3.Call
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 private const val TAG = "AuraAiRepository"
 private const val INFERENCE_TIMEOUT_MS = 60_000L
+private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
 data class SourceCitation(
     val title: String,
@@ -116,29 +118,75 @@ interface AiRepository {
     suspend fun enhancePrompt(rawPrompt: String): Result<String>
 }
 
-class FirebaseAiRepository(private val appContext: Context) : AiRepository {
+class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
+
+    private val prefs = PreferencesManager(appContext)
+
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(25, TimeUnit.SECONDS)
+        .build()
+
+    private suspend fun requireApiKey(): String {
+        val key = prefs.getEffectiveApiKey()
+        if (key.isBlank()) {
+            throw IllegalStateException("MISSING_GEMINI_API_KEY")
+        }
+        return key
+    }
 
     override suspend fun enhancePrompt(rawPrompt: String): Result<String> = withContext(Dispatchers.IO) {
         val trimmed = rawPrompt.trim()
         if (trimmed.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Enter a prompt to enhance."))
         }
+        val apiKey = try {
+            requireApiKey()
+        } catch (t: Throwable) {
+            return@withContext Result.failure(Exception(sanitizeAuraError(t.message, isImage = false)))
+        }
+
         val candidates = listOf("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash")
         var lastErr: Throwable? = null
         for (modelId in candidates) {
             try {
-                val model = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
-                    modelName = modelId,
-                    systemInstruction = content {
-                        text(
-                            "You are a frontier prompt engineer for Aura AI (Abhynex). Rewrite the user's rough prompt into a crystal-clear, high-leverage, structured prompt specifying objective, constraints, edge cases, and desired output format. Keep it concise (max 4-6 lines), preserve the user's original intent and language style, and return ONLY the rewritten prompt text with no quotes or preamble."
+                val payload = JSONObject().apply {
+                    put(
+                        "systemInstruction",
+                        JSONObject().put(
+                            "parts",
+                            JSONArray().put(
+                                JSONObject().put(
+                                    "text",
+                                    "You are a frontier prompt engineer for Aura AI (Abhynex). Rewrite the user's rough prompt into a crystal-clear, high-leverage, structured prompt specifying objective, constraints, edge cases, and desired output format. Keep it concise (max 4-6 lines), preserve the user's original intent and language style, and return ONLY the rewritten prompt text with no quotes or preamble."
+                                )
+                            )
                         )
-                    }
-                )
-                val response = withTimeout(15_000L) {
-                    model.generateContent("Rewrite and sharpen this prompt:\n$trimmed")
+                    )
+                    put(
+                        "contents",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put(
+                                    "parts",
+                                    JSONArray().put(
+                                        JSONObject().put("text", "Rewrite and sharpen this prompt:\n$trimmed")
+                                    )
+                                )
+                            }
+                        )
+                    )
                 }
-                val enhanced = response.text?.trim().orEmpty()
+
+                val responseJson = withTimeout(15_000L) {
+                    executeUnaryJsonRequest(
+                        url = "$GEMINI_API_BASE/$modelId:generateContent?key=$apiKey",
+                        bodyJson = payload
+                    )
+                }
+                val enhanced = extractTextFromResponse(responseJson).trim()
                 if (enhanced.isNotBlank()) {
                     return@withContext Result.success(enhanced)
                 }
@@ -164,6 +212,13 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
         request: AiRequest,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ) {
+        val apiKey = try {
+            requireApiKey()
+        } catch (t: Throwable) {
+            emitEvent(AiStreamEvent.Failed(sanitizeAuraError(t.message, isImage = false)))
+            return
+        }
+
         val startMs = System.currentTimeMillis()
         val systemText = buildSystemInstruction(
             persona = request.persona,
@@ -171,19 +226,34 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
             useWebSearch = request.useWebSearch,
             useCodeExecution = request.useCodeExecution
         )
-        val chatHistory = buildHistoryContents(request.history)
+        val chatHistory = buildHistoryJsonArray(request.history)
         val attachedBitmap = if (request.attachmentIsImage && request.attachmentUri != null) {
             loadScaledBitmap(Uri.parse(request.attachmentUri))
         } else null
 
         val promptText = buildUserPromptText(request)
         val hasUrlInPrompt = Regex("https?://\\S+", RegexOption.IGNORE_CASE).containsMatchIn(promptText)
-        val userContent = content("user") {
+
+        val userTurnParts = JSONArray().apply {
             if (attachedBitmap != null) {
-                image(attachedBitmap)
+                put(
+                    JSONObject().put(
+                        "inlineData",
+                        JSONObject().apply {
+                            put("mimeType", "image/jpeg")
+                            put("data", encodeBitmapJpegBase64(attachedBitmap))
+                        }
+                    )
+                )
             }
-            text(promptText)
+            put(JSONObject().put("text", promptText))
         }
+        chatHistory.put(
+            JSONObject().apply {
+                put("role", "user")
+                put("parts", userTurnParts)
+            }
+        )
 
         val candidateModels = buildList {
             add(request.modelTier.id)
@@ -192,194 +262,214 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
             add("gemini-3.1-flash-lite")
         }.distinct()
 
-        val activeTools = buildList {
-            when {
-                request.useCodeExecution -> add(Tool.codeExecution())
-                request.useWebSearch && hasUrlInPrompt -> {
-                    add(Tool.googleSearch())
-                    add(Tool.urlContext())
-                }
-                request.useWebSearch -> add(Tool.googleSearch())
-                hasUrlInPrompt -> add(Tool.urlContext())
-            }
-        }
-
-        val genConfig = generationConfig {
-            thinkingConfig = thinkingConfig {
-                when {
-                    request.capabilityMode == CapabilityMode.DEEP_THINK ||
-                        request.capabilityMode == CapabilityMode.CODE_ARCHITECT ||
-                        request.modelTier == AiModelTier.GEMINI_4_ARGON -> {
-                        includeThoughts = true
-                        thinkingLevel = ThinkingLevel.HIGH
-                    }
-                    request.capabilityMode == CapabilityMode.CONCISE -> {
-                        includeThoughts = false
-                        thinkingLevel = ThinkingLevel.LOW
-                    }
-                    else -> {
-                        includeThoughts = true
-                        thinkingLevel = ThinkingLevel.MEDIUM
-                    }
-                }
-            }
-        }
+        val toolsJson = buildToolsJsonArray(
+            useCodeExecution = request.useCodeExecution,
+            useWebSearch = request.useWebSearch,
+            hasUrlInPrompt = hasUrlInPrompt
+        )
 
         var lastError: Throwable? = null
 
         for ((index, modelId) in candidateModels.withIndex()) {
             val rawAccumulated = StringBuilder()
             val nativeThinkingAccumulated = StringBuilder()
-            val collectedSources = mutableListOf<SourceCitation>()
-            try {
-                val aiBackend = Firebase.ai(backend = GenerativeBackend.googleAI())
-                val model = if (activeTools.isNotEmpty()) {
-                    aiBackend.generativeModel(
-                        modelName = modelId,
-                        generationConfig = genConfig,
-                        systemInstruction = content { text(systemText) },
-                        tools = activeTools
+            val collectedSources = linkedMapOf<String, SourceCitation>()
+            var lastRenderedContent = ""
+            var lastThinkingText = ""
+
+            // Try with full thinkingConfig first; if a specific model rejects thinkingConfig with HTTP 400, retry cleanly once without thinkingConfig.
+            val attemptConfigs = listOf(true, false)
+            var succeeded = false
+
+            for (includeThinkingConfig in attemptConfigs) {
+                rawAccumulated.clear()
+                nativeThinkingAccumulated.clear()
+                collectedSources.clear()
+                lastRenderedContent = ""
+                lastThinkingText = ""
+
+                try {
+                    val requestPayload = buildChatRequestJson(
+                        systemText = systemText,
+                        contentsArray = chatHistory,
+                        capabilityMode = request.capabilityMode,
+                        modelTier = request.modelTier,
+                        toolsArray = toolsJson,
+                        includeThinking = includeThinkingConfig
                     )
-                } else {
-                    aiBackend.generativeModel(
-                        modelName = modelId,
-                        generationConfig = genConfig,
-                        systemInstruction = content { text(systemText) }
-                    )
-                }
 
-                Log.d(
-                    TAG,
-                    "Starting stream request: model=$modelId, webSearch=${request.useWebSearch}, codeExec=${request.useCodeExecution}, urlCtx=$hasUrlInPrompt, history=${chatHistory.size}"
-                )
-                withTimeout(INFERENCE_TIMEOUT_MS) {
-                    val stream = if (chatHistory.isEmpty()) {
-                        model.generateContentStream(userContent)
-                    } else {
-                        val chat = model.startChat(history = chatHistory)
-                        chat.sendMessageStream(userContent)
-                    }
-                    stream.collect { chunk ->
-                        chunk.candidates.firstOrNull()?.groundingMetadata?.groundingChunks?.forEach { gChunk ->
-                            val web = gChunk.web
-                            val uri = web?.uri?.trim().orEmpty()
-                            if (uri.isNotBlank() && collectedSources.none { it.uri == uri }) {
-                                val title = web?.title?.trim().orEmpty().ifBlank {
-                                    Uri.parse(uri).host?.removePrefix("www.") ?: "Web Source"
-                                }
-                                collectedSources.add(SourceCitation(title = title, uri = uri))
-                            }
-                        }
+                    withTimeout(INFERENCE_TIMEOUT_MS) {
+                        executeSseStreamRequest(
+                            url = "$GEMINI_API_BASE/$modelId:streamGenerateContent?alt=sse&key=$apiKey",
+                            bodyJson = requestPayload
+                        ) { chunkJson ->
+                            val candidates = chunkJson.optJSONArray("candidates")
+                            val candidate = candidates?.optJSONObject(0) ?: return@executeSseStreamRequest
 
-                        val thoughtChunk = chunk.thoughtSummary.orEmpty()
-                        if (thoughtChunk.isNotEmpty()) {
-                            nativeThinkingAccumulated.append(thoughtChunk)
-                            emitEvent(
-                                AiStreamEvent.ThinkingChunk(
-                                    thinkingText = nativeThinkingAccumulated.toString().trim(),
-                                    elapsedMs = System.currentTimeMillis() - startMs
-                                )
-                            )
-                        }
-
-                        val chunkBuffer = StringBuilder()
-                        val parts = chunk.candidates.firstOrNull()?.content?.parts.orEmpty()
-                        if (parts.isNotEmpty()) {
-                            parts.forEach { part ->
-                                when (part) {
-                                    is ExecutableCodePart -> {
-                                        val lang = part.language.lowercase().ifBlank { "python" }
-                                        val codeBody = part.code.trimEnd()
-                                        if (codeBody.isNotBlank()) {
-                                            chunkBuffer.append("\n\n```$lang\n$codeBody\n```\n\n")
+                            // Grounding web citations
+                            candidate.optJSONObject("groundingMetadata")
+                                ?.optJSONArray("groundingChunks")
+                                ?.let { chunks ->
+                                    for (i in 0 until chunks.length()) {
+                                        val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
+                                        val uri = web.optString("uri").trim()
+                                        if (uri.isNotBlank()) {
+                                            val title = web.optString("title").trim().ifBlank { uri }
+                                            collectedSources[uri] = SourceCitation(title = title, uri = uri)
                                         }
                                     }
-                                    is CodeExecutionResultPart -> {
-                                        val out = part.output.orEmpty().trim()
-                                        val outcome = part.outcome.toString()
-                                        if (out.isNotBlank()) {
-                                            chunkBuffer.append("\n```sandbox-output\n[$outcome]\n$out\n```\n\n")
+                                }
+
+                            val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
+                                ?: return@executeSseStreamRequest
+
+                            var hasNewThinking = false
+                            var hasNewContent = false
+
+                            for (i in 0 until parts.length()) {
+                                val part = parts.optJSONObject(i) ?: continue
+                                when {
+                                    part.optBoolean("thought", false) -> {
+                                        val t = part.optString("text")
+                                        if (t.isNotEmpty()) {
+                                            nativeThinkingAccumulated.append(t)
+                                            hasNewThinking = true
                                         }
                                     }
-                                    is TextPart -> {
-                                        chunkBuffer.append(part.text)
+                                    part.has("executableCode") -> {
+                                        val ec = part.optJSONObject("executableCode")
+                                        if (ec != null) {
+                                            val lang = ec.optString("language", "python")
+                                                .lowercase()
+                                                .ifBlank { "python" }
+                                            val code = ec.optString("code")
+                                            if (code.isNotBlank()) {
+                                                rawAccumulated.append("\n\n```$lang\n$code\n```\n")
+                                                hasNewContent = true
+                                            }
+                                        }
+                                    }
+                                    part.has("codeExecutionResult") -> {
+                                        val res = part.optJSONObject("codeExecutionResult")
+                                        if (res != null) {
+                                            val outcome = res.optString("outcome", "OUTCOME_OK")
+                                            val output = res.optString("output")
+                                            val statusPrefix = if (!outcome.contains("OK", ignoreCase = true)) {
+                                                "[Execution Status: $outcome]\n"
+                                            } else ""
+                                            val combinedOut = "$statusPrefix$output".trim()
+                                            if (combinedOut.isNotBlank()) {
+                                                rawAccumulated.append("\n```sandbox-output\n$combinedOut\n```\n\n")
+                                                hasNewContent = true
+                                            }
+                                        }
+                                    }
+                                    part.has("text") -> {
+                                        val textPart = part.optString("text")
+                                        if (textPart.isNotEmpty()) {
+                                            rawAccumulated.append(textPart)
+                                            hasNewContent = true
+                                        }
                                     }
                                 }
                             }
-                        } else {
-                            chunkBuffer.append(chunk.text.orEmpty())
-                        }
 
-                        val piece = chunkBuffer.toString()
-                        if (piece.isNotEmpty()) {
-                            rawAccumulated.append(piece)
-                            val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                            val combinedThinking = listOfNotNull(
-                                nativeThinkingAccumulated.toString().trim().ifBlank { null },
-                                parsed.thinking?.ifBlank { null }
-                            ).joinToString("\n\n").ifBlank { null }
+                            val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
+                            val elapsed = System.currentTimeMillis() - startMs
 
-                            if (combinedThinking != null) {
-                                emitEvent(
-                                    AiStreamEvent.ThinkingChunk(
-                                        thinkingText = combinedThinking,
-                                        elapsedMs = System.currentTimeMillis() - startMs
+                            if (nativeThinkingNow.isNotEmpty()) {
+                                if (hasNewThinking && nativeThinkingNow != lastThinkingText) {
+                                    lastThinkingText = nativeThinkingNow
+                                    emitEvent(
+                                        AiStreamEvent.ThinkingChunk(
+                                            thinkingText = nativeThinkingNow,
+                                            elapsedMs = elapsed
+                                        )
                                     )
-                                )
-                            }
-                            if (parsed.answer.isNotEmpty() || !parsed.isStillInsideThinkingTag) {
-                                emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                                }
+                                if (hasNewContent) {
+                                    val cleanContent = rawAccumulated.toString()
+                                    if (cleanContent != lastRenderedContent) {
+                                        lastRenderedContent = cleanContent
+                                        emitEvent(AiStreamEvent.ContentChunk(cleanContent))
+                                    }
+                                }
+                            } else if (hasNewContent || hasNewThinking) {
+                                val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                                if (!parsed.thinking.isNullOrBlank() && parsed.thinking != lastThinkingText) {
+                                    lastThinkingText = parsed.thinking
+                                    emitEvent(
+                                        AiStreamEvent.ThinkingChunk(
+                                            thinkingText = parsed.thinking,
+                                            elapsedMs = elapsed
+                                        )
+                                    )
+                                }
+                                if (parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent) {
+                                    lastRenderedContent = parsed.answer
+                                    emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                                }
                             }
                         }
                     }
-                }
 
-                val finalRaw = rawAccumulated.toString().trim()
-                if (finalRaw.isBlank()) {
-                    emitEvent(
-                        AiStreamEvent.Failed(
-                            "Aura AI returned an empty response. Please try again."
+                    val nativeFinalThoughts = nativeThinkingAccumulated.toString().trim().ifBlank { null }
+                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                    val finalThinking = nativeFinalThoughts ?: parsed.thinking
+                    val finalAnswer = if (nativeFinalThoughts != null) {
+                        rawAccumulated.toString().trim()
+                    } else {
+                        parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                    }
+                    val totalDuration = System.currentTimeMillis() - startMs
+
+                    if (finalAnswer.isNotBlank()) {
+                        emitEvent(
+                            AiStreamEvent.Completed(
+                                fullText = finalAnswer,
+                                thinkingText = finalThinking,
+                                thinkingDurationMs = if (finalThinking != null) totalDuration else 0L,
+                                sources = collectedSources.values.toList()
+                            )
                         )
-                    )
-                } else {
-                    val parsed = splitThinkingAndContent(finalRaw)
-                    val combinedThinking = listOfNotNull(
-                        nativeThinkingAccumulated.toString().trim().ifBlank { null },
-                        parsed.thinking?.ifBlank { null }
-                    ).joinToString("\n\n").ifBlank { null }
-                    emitEvent(
-                        AiStreamEvent.Completed(
-                            fullText = parsed.answer.ifBlank { finalRaw },
-                            thinkingText = combinedThinking,
-                            thinkingDurationMs = if (combinedThinking != null) {
-                                (System.currentTimeMillis() - startMs).coerceAtLeast(300L)
-                            } else 0L,
-                            sources = collectedSources.toList()
+                        return
+                    } else {
+                        emitEvent(
+                            AiStreamEvent.Failed("Aura AI returned an empty response. Please try again.")
                         )
+                        return
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(TAG, "Aura AI stream timed out on $modelId", e)
+                    emitEvent(
+                        AiStreamEvent.Failed("Aura AI request timed out after 60 seconds. Please tap Retry.")
                     )
+                    return
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    lastError = t
+                    Log.e(TAG, "Aura AI streaming failed on $modelId (thinking=$includeThinkingConfig): ${t.message}", t)
+                    val msgLower = (t.message ?: "").lowercase()
+                    if (includeThinkingConfig && rawAccumulated.isEmpty() &&
+                        (msgLower.contains("thinking") || msgLower.contains("400") || msgLower.contains("invalid_argument"))
+                    ) {
+                        continue // retry same model without thinkingConfig
+                    }
+                    break
                 }
-                return
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Streaming timed out on $modelId", e)
+            }
+
+            if (succeeded) return
+            val hasNext = index < candidateModels.lastIndex
+            val err = lastError
+            if (hasNext && rawAccumulated.isEmpty() && err != null && isRecoverableModelError(err)) {
+                Log.w(TAG, "Switching to next live Aura model after error on $modelId")
+                continue
+            } else {
                 emitEvent(
                     AiStreamEvent.Failed(
-                        "Aura AI request timed out after 60 seconds. Please retry."
-                    )
-                )
-                return
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                lastError = t
-                Log.e(TAG, "Aura AI streaming failed on $modelId: ${t.message}", t)
-                val hasNext = index < candidateModels.lastIndex
-                if (hasNext && rawAccumulated.isEmpty() && isRecoverableModelError(t)) {
-                    Log.w(TAG, "Switching to next live Aura model after quota/availability error on $modelId")
-                    continue
-                }
-                emitEvent(
-                    AiStreamEvent.Failed(
-                        sanitizeAuraError(t.localizedMessage ?: t.message, isImage = false)
+                        sanitizeAuraError(err?.localizedMessage ?: err?.message, isImage = false)
                     )
                 )
                 return
@@ -394,6 +484,12 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
     }
 
     private suspend fun generateOrEditImage(request: AiRequest): AiStreamEvent {
+        val apiKey = try {
+            requireApiKey()
+        } catch (t: Throwable) {
+            return AiStreamEvent.Failed(sanitizeAuraError(t.message, isImage = true))
+        }
+
         val attachedBitmap = if (request.attachmentIsImage && request.attachmentUri != null) {
             loadScaledBitmap(Uri.parse(request.attachmentUri))
         } else null
@@ -408,45 +504,59 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
 
         for ((index, modelId) in candidateImageModels.withIndex()) {
             try {
-                val config = generationConfig {
-                    responseModalities = listOf(ResponseModality.IMAGE)
-                }
-                val model = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
-                    modelName = modelId,
-                    generationConfig = config
-                )
-
-                val response = withTimeout(INFERENCE_TIMEOUT_MS) {
+                val parts = JSONArray().apply {
                     if (attachedBitmap != null) {
-                        model.generateContent(
-                            content {
-                                image(attachedBitmap)
-                                text(request.prompt)
+                        put(
+                            JSONObject().put(
+                                "inlineData",
+                                JSONObject().apply {
+                                    put("mimeType", "image/jpeg")
+                                    put("data", encodeBitmapJpegBase64(attachedBitmap))
+                                }
+                            )
+                        )
+                    }
+                    put(JSONObject().put("text", request.prompt))
+                }
+                val payload = JSONObject().apply {
+                    put(
+                        "contents",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put("parts", parts)
                             }
                         )
-                    } else {
-                        model.generateContent(request.prompt)
-                    }
+                    )
+                    put(
+                        "generationConfig",
+                        JSONObject().put(
+                            "responseModalities",
+                            JSONArray().put("IMAGE").put("TEXT")
+                        )
+                    )
                 }
 
-                val imagePart = response.candidates.firstOrNull()
-                    ?.content?.parts?.filterIsInstance<ImagePart>()
-                    ?.firstOrNull()
+                val responseJson = withTimeout(INFERENCE_TIMEOUT_MS) {
+                    executeUnaryJsonRequest(
+                        url = "$GEMINI_API_BASE/$modelId:generateContent?key=$apiKey",
+                        bodyJson = payload
+                    )
+                }
 
-                val bitmap = imagePart?.image
-                return if (bitmap == null) {
-                    AiStreamEvent.Failed(
-                        "Aura AI could not generate an image for this prompt. Please try again."
+                val bitmap = extractBitmapFromResponse(responseJson)
+                val caption = extractTextFromResponse(responseJson).trim()
+
+                if (bitmap == null) {
+                    val hasNext = index < candidateImageModels.lastIndex
+                    if (hasNext) continue
+                    return AiStreamEvent.Failed(
+                        caption.ifBlank { "Aura AI could not generate an image for that prompt." }
                     )
                 } else {
                     val savedPath = saveBitmapToInternalStorage(bitmap)
-                    val caption = if (attachedBitmap != null) {
-                        "Edited image by **Aura AI · Abhynex**."
-                    } else {
-                        "Created by **Aura AI · Abhynex**."
-                    }
-                    AiStreamEvent.Completed(
-                        fullText = caption,
+                    return AiStreamEvent.Completed(
+                        fullText = caption.ifBlank { "Generated with Aura AI · Abhynex" },
                         thinkingText = null,
                         thinkingDurationMs = 0L,
                         generatedImagePath = savedPath
@@ -475,6 +585,211 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
         )
     }
 
+    private suspend fun executeUnaryJsonRequest(
+        url: String,
+        bodyJson: JSONObject
+    ): JSONObject = suspendCancellableCoroutine { cont ->
+        val req = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val call = httpClient.newCall(req)
+        cont.invokeOnCancellation { call.cancel() }
+
+        call.enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isActive) cont.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: okhttp3.Response) {
+                response.use { res ->
+                    val rawBody = res.body?.string().orEmpty()
+                    if (!res.isSuccessful) {
+                        val parsedErr = parseApiErrorMessage(res.code, rawBody)
+                        if (cont.isActive) cont.resumeWithException(IOException(parsedErr))
+                        return
+                    }
+                    runCatching { JSONObject(rawBody) }
+                        .onSuccess { json -> if (cont.isActive) cont.resume(json) }
+                        .onFailure { e -> if (cont.isActive) cont.resumeWithException(e) }
+                }
+            }
+        })
+    }
+
+    private suspend fun executeSseStreamRequest(
+        url: String,
+        bodyJson: JSONObject,
+        onChunk: suspend (JSONObject) -> Unit
+    ) {
+        val req = Request.Builder()
+            .url(url)
+            .header("Accept", "text/event-stream")
+            .post(bodyJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val call = httpClient.newCall(req)
+        val response = suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: okhttp3.Response) {
+                    if (cont.isActive) {
+                        cont.resume(response)
+                    } else {
+                        response.close()
+                    }
+                }
+            })
+        }
+
+        response.use { res ->
+            if (!res.isSuccessful) {
+                val errBody = res.body?.string().orEmpty()
+                throw IOException(parseApiErrorMessage(res.code, errBody))
+            }
+            val reader = res.body?.charStream()?.buffered() ?: return
+            val dataBuffer = StringBuilder()
+
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isBlank()) {
+                    if (dataBuffer.isNotEmpty()) {
+                        val payload = dataBuffer.toString().trim()
+                        dataBuffer.clear()
+                        if (payload != "[DONE]") {
+                            runCatching { JSONObject(payload) }.getOrNull()?.let { json ->
+                                onChunk(json)
+                            }
+                        }
+                    }
+                } else if (line.startsWith("data:")) {
+                    dataBuffer.append(line.removePrefix("data:").trimStart())
+                }
+            }
+
+            if (dataBuffer.isNotEmpty()) {
+                val payload = dataBuffer.toString().trim()
+                if (payload != "[DONE]") {
+                    runCatching { JSONObject(payload) }.getOrNull()?.let { json ->
+                        onChunk(json)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseApiErrorMessage(code: Int, rawBody: String): String {
+        val extracted = runCatching {
+            val errObj = JSONObject(rawBody).optJSONObject("error")
+            val status = errObj?.optString("status").orEmpty()
+            val msg = errObj?.optString("message").orEmpty()
+            "$code $status: $msg".trim()
+        }.getOrNull()
+        return extracted?.ifBlank { "HTTP $code: $rawBody" } ?: "HTTP $code: $rawBody"
+    }
+
+    private fun buildChatRequestJson(
+        systemText: String,
+        contentsArray: JSONArray,
+        capabilityMode: CapabilityMode,
+        modelTier: AiModelTier,
+        toolsArray: JSONArray?,
+        includeThinking: Boolean
+    ): JSONObject {
+        return JSONObject().apply {
+            put(
+                "systemInstruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(JSONObject().put("text", systemText))
+                )
+            )
+            put("contents", contentsArray)
+            if (includeThinking) {
+                val thinkingObj = JSONObject().apply {
+                    when {
+                        capabilityMode == CapabilityMode.DEEP_THINK ||
+                            capabilityMode == CapabilityMode.CODE_ARCHITECT ||
+                            modelTier == AiModelTier.GEMINI_4_ARGON -> {
+                            put("includeThoughts", true)
+                            put("thinkingLevel", "HIGH")
+                        }
+                        capabilityMode == CapabilityMode.CONCISE -> {
+                            put("includeThoughts", false)
+                            put("thinkingLevel", "LOW")
+                        }
+                        else -> {
+                            put("includeThoughts", true)
+                            put("thinkingLevel", "MEDIUM")
+                        }
+                    }
+                }
+                put("generationConfig", JSONObject().put("thinkingConfig", thinkingObj))
+            }
+            if (toolsArray != null && toolsArray.length() > 0) {
+                put("tools", toolsArray)
+            }
+        }
+    }
+
+    private fun buildToolsJsonArray(
+        useCodeExecution: Boolean,
+        useWebSearch: Boolean,
+        hasUrlInPrompt: Boolean
+    ): JSONArray? {
+        val tools = JSONArray()
+        when {
+            useCodeExecution -> tools.put(JSONObject().put("code_execution", JSONObject()))
+            useWebSearch && hasUrlInPrompt -> {
+                tools.put(JSONObject().put("google_search", JSONObject()))
+                tools.put(JSONObject().put("url_context", JSONObject()))
+            }
+            useWebSearch -> tools.put(JSONObject().put("google_search", JSONObject()))
+            hasUrlInPrompt -> tools.put(JSONObject().put("url_context", JSONObject()))
+        }
+        return if (tools.length() > 0) tools else null
+    }
+
+    private fun extractTextFromResponse(json: JSONObject): String {
+        val parts = json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?: return ""
+        val sb = StringBuilder()
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            if (!part.optBoolean("thought", false) && part.has("text")) {
+                sb.append(part.optString("text"))
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun extractBitmapFromResponse(json: JSONObject): Bitmap? {
+        val parts = json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?: return null
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            val inline = part.optJSONObject("inlineData") ?: part.optJSONObject("inline_data")
+            val b64 = inline?.optString("data").orEmpty()
+            if (b64.isNotBlank()) {
+                val bytes = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull() ?: continue
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (bmp != null) return bmp
+            }
+        }
+        return null
+    }
+
     private fun isRecoverableModelError(t: Throwable): Boolean {
         val msg = (t.message ?: t.localizedMessage ?: "").lowercase()
         return msg.contains("quota") ||
@@ -494,20 +809,26 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
     private fun sanitizeAuraError(raw: String?, isImage: Boolean): String {
         val msg = (raw ?: "").lowercase()
         return when {
+            msg.contains("missing_gemini_api_key") -> {
+                "API Key is not set yet. Tap the Key icon at the top (or Drawer → Settings) to paste and save your API key."
+            }
+            msg.contains("api_key_invalid") || msg.contains("api key not valid") ||
+                msg.contains("401") || msg.contains("unauthenticated") -> {
+                "Invalid API Key. Open Settings → API Key to update and save a valid key."
+            }
             msg.contains("quota") || msg.contains("429") || msg.contains("rate") ||
                 msg.contains("exceeded") || msg.contains("resource_exhausted") -> {
                 if (isImage) {
-                    "Aura Imagine capacity is currently limited or requires an upgraded backend plan. Please retry shortly."
+                    "Aura Imagine capacity is currently limited or requires an upgraded API plan. Please retry shortly."
                 } else {
-                    "Aura AI daily request capacity has been reached. Please wait a moment and tap Retry."
+                    "Aura AI request rate limit reached. Please wait a moment and tap Retry."
                 }
             }
             msg.contains("billing") || msg.contains("blaze") -> {
-                "This Aura AI mode requires an upgraded Firebase Blaze plan on the backend project."
+                "This Aura AI mode requires billing enabled on your API project."
             }
-            msg.contains("403") || msg.contains("app check") || msg.contains("permission") ||
-                msg.contains("attestation") -> {
-                "Aura AI security verification failed. Ensure internet access and reinstall the latest build."
+            msg.contains("403") || msg.contains("permission") -> {
+                "Aura AI access denied (403). Verify your GEMINI_API_KEY permissions and try again."
             }
             msg.contains("unable to resolve host") || msg.contains("network") ||
                 msg.contains("connect") || msg.contains("timeout") -> {
@@ -568,25 +889,34 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
         return "$brandRule$searchDirective$sandboxDirective\n\nPersona Focus: $personaPrompt\n\nMode: $modeInstruction"
     }
 
-    private fun buildHistoryContents(history: List<MessageEntity>): List<Content> {
+    private fun buildHistoryJsonArray(history: List<MessageEntity>): JSONArray {
         val validMessages = history
             .filter { !it.isError && it.content.isNotBlank() }
             .takeLast(14)
 
-        val alternating = mutableListOf<Content>()
+        val alternating = mutableListOf<Pair<String, String>>()
         var expectRole = "user"
         for (msg in validMessages) {
             val role = if (msg.role == "user") "user" else "model"
             if (role == expectRole) {
-                alternating.add(content(role) { text(msg.content) })
+                alternating.add(role to msg.content)
                 expectRole = if (expectRole == "user") "model" else "user"
             }
         }
-        // History passed to startChat must end with a "model" turn because the new message is "user".
-        if (alternating.lastOrNull()?.role == "user") {
+        if (alternating.lastOrNull()?.first == "user") {
             alternating.removeAt(alternating.lastIndex)
         }
-        return alternating
+
+        return JSONArray().apply {
+            alternating.forEach { (role, text) ->
+                put(
+                    JSONObject().apply {
+                        put("role", role)
+                        put("parts", JSONArray().put(JSONObject().put("text", text)))
+                    }
+                )
+            }
+        }
     }
 
     private fun buildUserPromptText(request: AiRequest): String {
@@ -596,6 +926,12 @@ class FirebaseAiRepository(private val appContext: Context) : AiRepository {
         } else {
             request.prompt
         }
+    }
+
+    private fun encodeBitmapJpegBase64(bitmap: Bitmap): String {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out)
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
     private suspend fun loadScaledBitmap(uri: Uri): Bitmap? = withContext(Dispatchers.IO) {
