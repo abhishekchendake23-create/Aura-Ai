@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path
+        name="camera_scans"
+        path="camera_scans/" />
+    <files-path
+        name="generated_images"
+        path="generated_images/" />
+</paths>

@@ -31,12 +31,10 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Functions
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.School
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TravelExplore
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -52,8 +50,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.PersonaEntity
-import com.example.data.model.AiModelTier
+import com.example.data.model.AppLanguage
 import com.example.data.model.DEFAULT_PROMPT_STARTERS
 import com.example.data.model.PromptStarter
 import com.example.ui.components.GeminiSparkleIcon
@@ -63,20 +60,14 @@ import java.util.Calendar
 
 @Composable
 fun WelcomeEmptyState(
-    selectedModel: AiModelTier,
-    personas: List<PersonaEntity>,
-    activePersona: PersonaEntity?,
-    webSearchEnabled: Boolean = false,
-    codeExecutionEnabled: Boolean = false,
+    selectedLanguage: AppLanguage,
     hasEffectiveApiKey: Boolean = true,
-    onSelectModel: (AiModelTier) -> Unit,
-    onSelectPersona: (PersonaEntity) -> Unit,
-    onToggleWebSearch: () -> Unit = {},
-    onToggleCodeExecution: () -> Unit = {},
+    onSelectLanguage: (AppLanguage) -> Unit = {},
     onOpenApiKeySettings: () -> Unit = {},
     onStarterSelected: (PromptStarter) -> Unit,
     onOpenPersonaStudio: () -> Unit,
     onOpenLiveVoice: () -> Unit,
+    onOpenToolsSheet: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val auraColors = LocalAuraColors.current
@@ -100,7 +91,7 @@ fun WelcomeEmptyState(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(vertical = 20.dp),
+            .padding(vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -115,7 +106,7 @@ fun WelcomeEmptyState(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                GeminiSparkleIcon(size = 40.dp, animate = true)
+                GeminiSparkleIcon(size = 38.dp, animate = true)
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(14.dp))
@@ -155,7 +146,7 @@ fun WelcomeEmptyState(
                 textAlign = TextAlign.Start
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             if (!hasEffectiveApiKey) {
                 Surface(
@@ -211,154 +202,126 @@ fun WelcomeEmptyState(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Real-time Aura Live Voice Launch Card (30 Characters)
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            // Clean Language Quick Pills (Auto / मराठी / हिन्दी / English)
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .border(
-                        width = 1.dp,
-                        color = auraColors.sparkleStart.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(18.dp)
-                    )
-                    .clickable(onClick = onOpenLiveVoice)
-                    .testTag("welcome_live_voice_card")
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
+                AppLanguage.entries.forEach { lang ->
+                    val active = lang == selectedLanguage
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (active) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceContainerLow,
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(
+                                width = 1.dp,
+                                color = if (active) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .clickable { onSelectLanguage(lang) }
+                            .testTag("welcome_lang_${lang.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                        Text(
+                            text = lang.nativeLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                         )
                     }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Aura Live Voice",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Talk in real time · 30 voice characters",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Quick Power Tools Row (Python Sandbox & Web + URL Reader)
+            // Clean 2-action dock: Aura Live Voice + Modes & Tools
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (codeExecutionEnabled) auraColors.emeraldContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(18.dp))
                         .border(
                             width = 1.dp,
-                            color = if (codeExecutionEnabled) auraColors.emerald.copy(alpha = 0.7f)
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(16.dp)
+                            color = auraColors.sparkleStart.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(18.dp)
                         )
-                        .clickable(onClick = onToggleCodeExecution)
-                        .testTag("welcome_sandbox_toggle")
+                        .clickable(onClick = onOpenLiveVoice)
+                        .testTag("welcome_live_voice_card")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Terminal,
+                            imageVector = Icons.Rounded.GraphicEq,
                             contentDescription = null,
-                            tint = if (codeExecutionEnabled) auraColors.emerald
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            tint = auraColors.sparkleStart,
+                            modifier = Modifier.size(20.dp)
                         )
                         Column {
                             Text(
-                                text = "Python Lab",
-                                style = MaterialTheme.typography.labelLarge,
+                                text = "Live Voice",
+                                style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (codeExecutionEnabled) "Live runner ON" else "Execute & verify",
+                                text = "30 characters",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (codeExecutionEnabled) auraColors.emerald
-                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (webSearchEnabled) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(18.dp))
                         .border(
                             width = 1.dp,
-                            color = if (webSearchEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(16.dp)
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(18.dp)
                         )
-                        .clickable(onClick = onToggleWebSearch)
-                        .testTag("welcome_web_toggle")
+                        .clickable(onClick = onOpenToolsSheet)
+                        .testTag("welcome_open_tools")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Public,
+                            imageVector = Icons.Rounded.Tune,
                             contentDescription = null,
-                            tint = if (webSearchEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
                         )
                         Column {
                             Text(
-                                text = "Web + Links",
-                                style = MaterialTheme.typography.labelLarge,
+                                text = "Tools & Modes",
+                                style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (webSearchEnabled) "Grounding ON" else "Live search",
+                                text = "Python, Imagine, Key",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (webSearchEnabled) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -366,9 +329,8 @@ fun WelcomeEmptyState(
             }
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // Quick Aura AI Mode Switcher Row
         Row(
             modifier = Modifier
                 .widthIn(max = 600.dp)
@@ -378,80 +340,21 @@ fun WelcomeEmptyState(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "AURA AI MODES",
+                text = "TRY ASKING",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = selectedModel.displayName,
+                text = "Personas →",
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenPersonaStudio)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("welcome_open_studio")
             )
         }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AiModelTier.entries.forEach { tier ->
-                val isSelected = tier == selectedModel
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(
-                            width = 1.dp,
-                            color = if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                        .clickable { onSelectModel(tier) }
-                        .testTag("welcome_model_${tier.id}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (tier.isImageModel) {
-                            Icon(
-                                imageVector = Icons.Rounded.Palette,
-                                contentDescription = null,
-                                tint = if (isSelected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
-                        Text(
-                            text = tier.shortName,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(22.dp))
-
-        // Suggestion Launchpads
-        Text(
-            text = "TRY ASKING",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .widthIn(max = 600.dp)
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-        )
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -464,83 +367,6 @@ fun WelcomeEmptyState(
                     starter = starter,
                     onClick = { onStarterSelected(starter) }
                 )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(22.dp))
-
-        // Active Personas Strip
-        Row(
-            modifier = Modifier
-                .widthIn(max = 600.dp)
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "PERSONAS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "Studio →",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpenPersonaStudio)
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .testTag("welcome_open_studio")
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            personas.forEach { persona ->
-                val isSelected = persona.id == activePersona?.id
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(
-                            width = 1.dp,
-                            color = if (isSelected) MaterialTheme.colorScheme.secondary
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                        .clickable { onSelectPersona(persona) }
-                        .testTag("welcome_persona_${persona.id}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = personaIconFor(persona.iconKey),
-                            contentDescription = null,
-                            tint = if (isSelected) MaterialTheme.colorScheme.secondary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = persona.name,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
             }
         }
     }

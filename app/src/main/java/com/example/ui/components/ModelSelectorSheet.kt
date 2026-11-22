@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -86,6 +87,7 @@ fun ModelSelectorSheet(
                 AiModelTier.entries.filter { it.category == category }.forEach { tier ->
                     val isSelected = tier == selectedModel
                     val icon = when (tier) {
+                        AiModelTier.AUTO_ROUTER -> Icons.Rounded.AutoFixHigh
                         AiModelTier.GEMINI_4_ARGON -> Icons.Rounded.Psychology
                         AiModelTier.GEMINI_3_8_FLASH -> Icons.Rounded.AutoAwesome
                         AiModelTier.GEMINI_3_5_FLASH_LITE -> Icons.Rounded.Bolt

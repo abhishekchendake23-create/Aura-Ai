@@ -32,8 +32,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.IosShare
-import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
@@ -51,6 +49,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,15 +65,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.model.AiModelTier
+import com.example.data.model.CapabilityMode
 import com.example.ui.AppDestination
 import com.example.ui.ChatViewModel
 import com.example.ui.components.AssistantMessageBlock
+import com.example.ui.components.AuraToolsSheet
 import com.example.ui.components.ChatDrawerContent
 import com.example.ui.components.ComposerBar
 import com.example.ui.components.GeminiSparkleIcon
 import com.example.ui.components.ModelSelectorSheet
 import com.example.ui.components.StreamingAssistantBlock
 import com.example.ui.components.UserMessageBubble
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -85,7 +88,11 @@ fun AuraAppRoot(viewModel: ChatViewModel) {
     val activePersonaId by viewModel.activePersonaId.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarkedMessages.collectAsStateWithLifecycle()
     val selectedVoice by viewModel.selectedVoice.collectAsStateWithLifecycle()
+    val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
     val liveVoiceStatus by viewModel.liveVoiceStatus.collectAsStateWithLifecycle()
+    val isLiveMicMuted by viewModel.isLiveMicMuted.collectAsStateWithLifecycle()
+    val liveVoiceTranscript by viewModel.liveVoiceTranscript.collectAsStateWithLifecycle()
+    val liveAudioLevel by viewModel.liveAudioLevel.collectAsStateWithLifecycle()
 
     when (destination) {
         AppDestination.Chat -> {
@@ -115,10 +122,17 @@ fun AuraAppRoot(viewModel: ChatViewModel) {
         AppDestination.LiveVoice -> {
             LiveVoiceScreen(
                 selectedVoice = selectedVoice,
+                selectedLanguage = selectedLanguage,
                 status = liveVoiceStatus,
+                isMuted = isLiveMicMuted,
+                liveTranscript = liveVoiceTranscript,
+                audioLevel = liveAudioLevel,
                 onStartVoice = { viewModel.startLiveVoice() },
                 onStopVoice = { viewModel.stopLiveVoice() },
+                onToggleMute = { viewModel.toggleLiveMicMute() },
                 onSelectVoice = { viewModel.selectVoiceCharacter(it) },
+                onSelectLanguage = { viewModel.selectLanguage(it) },
+                onSendCameraFrame = { viewModel.sendLiveCameraFrame(it) },
                 onBack = { viewModel.navigateTo(AppDestination.Chat) }
             )
         }
@@ -141,6 +155,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val attachmentDraft by viewModel.attachmentDraft.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     val selectedCapability by viewModel.selectedCapability.collectAsStateWithLifecycle()
+    val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val codeExecutionEnabled by viewModel.codeExecutionEnabled.collectAsStateWithLifecycle()
     val isEnhancingPrompt by viewModel.isEnhancingPrompt.collectAsStateWithLifecycle()
@@ -152,12 +167,45 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val savedUserApiKey by viewModel.savedUserApiKey.collectAsStateWithLifecycle()
     val hasEffectiveApiKey by viewModel.hasEffectiveApiKey.collectAsStateWithLifecycle()
+    val savedGroqApiKey by viewModel.savedGroqApiKey.collectAsStateWithLifecycle()
+    val hasEffectiveGroqApiKey by viewModel.hasEffectiveGroqApiKey.collectAsStateWithLifecycle()
+    val preferFastGroq by viewModel.preferFastGroq.collectAsStateWithLifecycle()
+    val memories by viewModel.memories.collectAsStateWithLifecycle()
+    val knowledgeDocs by viewModel.knowledgeDocs.collectAsStateWithLifecycle()
+    val vaultRagEnabled by viewModel.vaultRagEnabled.collectAsStateWithLifecycle()
+    val openScannerTrigger by viewModel.openScannerTrigger.collectAsStateWithLifecycle()
+    val openVaultTrigger by viewModel.openVaultTrigger.collectAsStateWithLifecycle()
+    val openMemoryTrigger by viewModel.openMemoryTrigger.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
 
     var showModelSheet by remember { mutableStateOf(false) }
+    var showToolsSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showScannerSheet by remember { mutableStateOf(false) }
+    var showMemorySheet by remember { mutableStateOf(false) }
+    var showKnowledgeVaultSheet by remember { mutableStateOf(false) }
+    var showWhisperSheet by remember { mutableStateOf(false) }
     var isInChatSearchOpen by remember { mutableStateOf(false) }
     var inChatQuery by remember { mutableStateOf("") }
+
+    LaunchedEffect(openScannerTrigger) {
+        if (openScannerTrigger) {
+            showScannerSheet = true
+            viewModel.consumeScannerTrigger()
+        }
+    }
+    LaunchedEffect(openVaultTrigger) {
+        if (openVaultTrigger) {
+            showKnowledgeVaultSheet = true
+            viewModel.consumeVaultTrigger()
+        }
+    }
+    LaunchedEffect(openMemoryTrigger) {
+        if (openMemoryTrigger) {
+            showMemorySheet = true
+            viewModel.consumeMemoryTrigger()
+        }
+    }
 
     LaunchedEffect(activeConversationId) {
         isInChatSearchOpen = false
@@ -177,6 +225,22 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     ) { uri ->
         if (uri != null) {
             viewModel.attachDocument(uri)
+        }
+    }
+
+    val exportBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportBackup(uri)
+        }
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importBackup(uri)
         }
     }
 
@@ -201,14 +265,30 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         }
     }
 
-    LaunchedEffect(
-        messages.size,
-        streamingState?.contentText?.length,
-        streamingState?.thinkingText?.length
-    ) {
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val total = layout.totalItemsCount
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total == 0 || lastVisible >= total - 2
+        }
+    }
+
+    LaunchedEffect(messages.size, streamingState?.messageId) {
         val lastItemIndex = messages.size + if (streamingState != null) 1 else 0
         if (messages.isNotEmpty() || streamingState != null) {
             listState.animateScrollToItem(lastItemIndex)
+        }
+    }
+
+    LaunchedEffect(
+        streamingState?.contentText?.length,
+        streamingState?.thinkingText?.length
+    ) {
+        if (streamingState != null && isNearBottom) {
+            delay(90L)
+            val lastItemIndex = messages.size + 1
+            listState.scrollToItem(lastItemIndex, scrollOffset = Int.MAX_VALUE / 2)
         }
     }
 
@@ -220,6 +300,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                 activeConversationId = activeConversationId,
                 searchQuery = searchQuery,
                 bookmarkCount = bookmarks.size,
+                memoryCount = memories.size,
+                vaultDocCount = knowledgeDocs.size,
                 onSearchQueryChange = { viewModel.updateSearchQuery(it) },
                 onNewChat = {
                     viewModel.startNewChat()
@@ -244,6 +326,18 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     scope.launch { drawerState.close() }
                     viewModel.navigateTo(AppDestination.LiveVoice)
                 },
+                onOpenScanner = {
+                    scope.launch { drawerState.close() }
+                    showScannerSheet = true
+                },
+                onOpenKnowledgeVault = {
+                    scope.launch { drawerState.close() }
+                    showKnowledgeVaultSheet = true
+                },
+                onOpenMemoryVault = {
+                    scope.launch { drawerState.close() }
+                    showMemorySheet = true
+                },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     showSettingsSheet = true
@@ -259,27 +353,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     AuraTopBar(
                         modelShortName = selectedModel.shortName,
-                        hasMessages = messages.isNotEmpty(),
-                        isSearchOpen = isInChatSearchOpen,
-                        hasEffectiveApiKey = hasEffectiveApiKey,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenModelSelector = { showModelSheet = true },
-                        onOpenApiKeySettings = { showSettingsSheet = true },
-                        onToggleSearch = {
-                            isInChatSearchOpen = !isInChatSearchOpen
-                            if (!isInChatSearchOpen) inChatQuery = ""
-                        },
-                        onExportThread = {
-                            val md = viewModel.buildExportMarkdown(messages)
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "Aura AI Thread Export")
-                                putExtra(Intent.EXTRA_TEXT, md)
-                            }
-                            context.startActivity(
-                                Intent.createChooser(shareIntent, "Export Aura AI Thread (.md)")
-                            )
-                        },
                         onNewChat = { viewModel.startNewChat() }
                     )
 
@@ -294,7 +369,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                                .padding(horizontal = 14.dp, vertical = 4.dp)
                                 .border(
                                     width = 1.dp,
                                     color = MaterialTheme.colorScheme.outlineVariant,
@@ -370,42 +445,32 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     attachment = attachmentDraft,
                     selectedModel = selectedModel,
                     selectedCapability = selectedCapability,
-                    activePersona = activePersona,
+                    selectedLanguage = selectedLanguage,
                     webSearchEnabled = webSearchEnabled,
                     codeExecutionEnabled = codeExecutionEnabled,
-                    isEnhancingPrompt = isEnhancingPrompt,
+                    vaultRagActive = vaultRagEnabled && knowledgeDocs.isNotEmpty(),
                     isStreaming = streamingState != null,
                     onTextChange = { viewModel.updateComposerText(it) },
-                    onSelectModel = { viewModel.selectModel(it) },
-                    onSelectCapability = { viewModel.selectCapability(it) },
-                    onToggleWebSearch = { viewModel.toggleWebSearch() },
-                    onToggleCodeExecution = { viewModel.toggleCodeExecution() },
-                    onEnhancePrompt = { viewModel.enhanceComposerPrompt() },
+                    onToggleDeepSearch = { viewModel.toggleWebSearch() },
+                    onToggleDeepThink = {
+                        val nextMode = if (selectedCapability == CapabilityMode.DEEP_THINK) {
+                            CapabilityMode.STANDARD
+                        } else {
+                            CapabilityMode.DEEP_THINK
+                        }
+                        viewModel.selectCapability(nextMode)
+                    },
+                    onOpenToolsSheet = { showToolsSheet = true },
                     onApplySlashCommand = { viewModel.applySlashCommand(it) },
-                    onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
                     onPickImage = {
                         photoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    onPickFile = {
-                        filePickerLauncher.launch(arrayOf("text/*", "application/json"))
-                    },
-                    onVoiceInput = {
-                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                            putExtra(
-                                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                            )
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Aura AI")
-                        }
-                        runCatching { voiceLauncher.launch(intent) }.onFailure {
-                            viewModel.showToastMessage("Voice input is unavailable on this device")
-                        }
-                    },
                     onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) },
                     onClearAttachment = { viewModel.clearAttachment() },
+                    onClearImagineMode = { viewModel.selectModel(AiModelTier.GEMINI_3_8_FLASH) },
+                    onClearSandboxMode = { viewModel.toggleCodeExecution() },
                     onSend = { viewModel.sendPrompt() },
                     onStop = { viewModel.stopGeneration() }
                 )
@@ -419,16 +484,9 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             ) {
                 if (messages.isEmpty() && streamingState == null) {
                     WelcomeEmptyState(
-                        selectedModel = selectedModel,
-                        personas = personas,
-                        activePersona = activePersona,
-                        webSearchEnabled = webSearchEnabled,
-                        codeExecutionEnabled = codeExecutionEnabled,
+                        selectedLanguage = selectedLanguage,
                         hasEffectiveApiKey = hasEffectiveApiKey,
-                        onSelectModel = { viewModel.selectModel(it) },
-                        onSelectPersona = { viewModel.selectPersona(it) },
-                        onToggleWebSearch = { viewModel.toggleWebSearch() },
-                        onToggleCodeExecution = { viewModel.toggleCodeExecution() },
+                        onSelectLanguage = { viewModel.selectLanguage(it) },
                         onOpenApiKeySettings = { showSettingsSheet = true },
                         onStarterSelected = { starter ->
                             viewModel.sendPrompt(
@@ -438,7 +496,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                             )
                         },
                         onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
-                        onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) }
+                        onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) },
+                        onOpenToolsSheet = { showToolsSheet = true }
                     )
                 } else {
                     val lastAssistantId = remember(messages) {
@@ -454,7 +513,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         modifier = Modifier
                             .widthIn(max = 680.dp)
                             .fillMaxSize(),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = 20.dp)
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 20.dp)
                     ) {
                         items(visibleMessages, key = { it.id }) { msg ->
                             if (msg.role == "user") {
@@ -473,6 +532,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                     onFollowUpPrompt = { followUp ->
                                         viewModel.sendPrompt(overridePrompt = followUp)
                                     },
+                                    onSaveToMemory = { text ->
+                                        viewModel.addMemory(
+                                            content = text.replace(Regex("\\s+"), " ").trim().take(220),
+                                            category = "Saved Insight"
+                                        )
+                                    },
                                     onShare = {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -488,9 +553,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
 
                         streamingState?.let { activeStream ->
                             item(key = "streaming_${activeStream.messageId}") {
-                                AnimatedVisibility(visible = true) {
-                                    StreamingAssistantBlock(streaming = activeStream)
-                                }
+                                StreamingAssistantBlock(streaming = activeStream)
                             }
                         }
 
@@ -509,15 +572,153 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         )
     }
 
+    if (showToolsSheet) {
+        AuraToolsSheet(
+            selectedLanguage = selectedLanguage,
+            selectedCapability = selectedCapability,
+            selectedModel = selectedModel,
+            activePersona = activePersona,
+            codeExecutionEnabled = codeExecutionEnabled,
+            hasMessages = messages.isNotEmpty(),
+            canEnhancePrompt = composerText.trim().length >= 4 && streamingState == null,
+            isEnhancingPrompt = isEnhancingPrompt,
+            hasEffectiveApiKey = hasEffectiveApiKey,
+            memoryCount = memories.size,
+            vaultDocCount = knowledgeDocs.size,
+            onSelectLanguage = { viewModel.selectLanguage(it) },
+            onSelectCapability = { viewModel.selectCapability(it) },
+            onToggleImagineMode = {
+                if (selectedModel.isImageModel) {
+                    viewModel.selectModel(AiModelTier.GEMINI_3_8_FLASH)
+                } else {
+                    viewModel.selectModel(AiModelTier.NANO_BANANA_2_1)
+                }
+            },
+            onToggleCodeExecution = { viewModel.toggleCodeExecution() },
+            onPickFile = {
+                filePickerLauncher.launch(arrayOf("text/*", "application/json"))
+            },
+            onOpenScanner = { showScannerSheet = true },
+            onOpenWhisperAudio = { showWhisperSheet = true },
+            onOpenKnowledgeVault = { showKnowledgeVaultSheet = true },
+            onOpenMemoryVault = { showMemorySheet = true },
+            onVoiceDictation = {
+                val speechLang = if (selectedLanguage.speechLocaleTag.isNotBlank()) {
+                    selectedLanguage.speechLocaleTag
+                } else {
+                    Locale.getDefault().toLanguageTag()
+                }
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, speechLang)
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Aura AI")
+                }
+                runCatching { voiceLauncher.launch(intent) }.onFailure {
+                    viewModel.showToastMessage("Voice input is unavailable on this device")
+                }
+            },
+            onInsertSlashCommand = {
+                val cur = composerText.trimStart()
+                if (!cur.startsWith("/")) {
+                    viewModel.updateComposerText(if (composerText.isBlank()) "/" else "/$composerText")
+                }
+            },
+            onEnhancePrompt = { viewModel.enhanceComposerPrompt() },
+            onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
+            onToggleInChatSearch = {
+                isInChatSearchOpen = !isInChatSearchOpen
+                if (!isInChatSearchOpen) inChatQuery = ""
+            },
+            onExportThread = {
+                val md = viewModel.buildExportMarkdown(messages)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Aura AI Thread Export")
+                    putExtra(Intent.EXTRA_TEXT, md)
+                }
+                context.startActivity(
+                    Intent.createChooser(shareIntent, "Export Aura AI Thread (.md)")
+                )
+            },
+            onOpenSettings = { showSettingsSheet = true },
+            onDismiss = { showToolsSheet = false }
+        )
+    }
+
     if (showSettingsSheet) {
         SettingsSheet(
             themeMode = themeMode,
+            selectedLanguage = selectedLanguage,
             savedApiKey = savedUserApiKey,
             hasEffectiveApiKey = hasEffectiveApiKey,
+            savedGroqApiKey = savedGroqApiKey,
+            hasEffectiveGroqApiKey = hasEffectiveGroqApiKey,
+            preferFastGroq = preferFastGroq,
             onSelectTheme = { viewModel.setThemeMode(it) },
+            onSelectLanguage = { viewModel.selectLanguage(it) },
             onSaveApiKey = { viewModel.saveApiKey(it) },
+            onSaveGroqApiKey = { viewModel.saveGroqApiKey(it) },
+            onSetPreferFastGroq = { viewModel.setPreferFastGroq(it) },
+            onExportBackup = {
+                exportBackupLauncher.launch("aura_ai_backup_${System.currentTimeMillis()}.json")
+            },
+            onImportBackup = {
+                importBackupLauncher.launch(arrayOf("application/json"))
+            },
             onClearAllHistory = { viewModel.clearAllHistory() },
             onDismiss = { showSettingsSheet = false }
+        )
+    }
+
+    if (showScannerSheet) {
+        ScannerSheet(
+            onSolvePaper = { draft, prompt ->
+                viewModel.sendPrompt(
+                    overridePrompt = prompt,
+                    overrideMode = CapabilityMode.DEEP_THINK,
+                    overrideDraft = draft
+                )
+            },
+            onSaveToVault = { title, sourceType, content ->
+                viewModel.indexDocumentToVault(title, sourceType, content)
+            },
+            onDismiss = { showScannerSheet = false }
+        )
+    }
+
+    if (showMemorySheet) {
+        MemoryVaultSheet(
+            memories = memories,
+            onAddMemory = { content, category -> viewModel.addMemory(content, category) },
+            onToggleMemory = { viewModel.toggleMemory(it) },
+            onDeleteMemory = { viewModel.deleteMemory(it) },
+            onDismiss = { showMemorySheet = false }
+        )
+    }
+
+    if (showKnowledgeVaultSheet) {
+        KnowledgeVaultSheet(
+            docs = knowledgeDocs,
+            vaultRagEnabled = vaultRagEnabled,
+            onToggleVaultRag = { viewModel.setVaultRagEnabled(it) },
+            onIndexDocument = { title, sourceType, content ->
+                viewModel.indexDocumentToVault(title, sourceType, content)
+            },
+            onDeleteDoc = { viewModel.deleteKnowledgeDoc(it) },
+            onDismiss = { showKnowledgeVaultSheet = false }
+        )
+    }
+
+    if (showWhisperSheet) {
+        WhisperAudioSheet(
+            groqApiKeyProvider = { viewModel.getEffectiveGroqKeySuspend() },
+            selectedLanguage = selectedLanguage,
+            onInsertTranscript = { transcript -> viewModel.appendVoiceText(transcript) },
+            onRunPromptWithTranscript = { prompt -> viewModel.sendPrompt(overridePrompt = prompt) },
+            onDismiss = { showWhisperSheet = false }
         )
     }
 }
@@ -525,14 +726,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
 @Composable
 private fun AuraTopBar(
     modelShortName: String,
-    hasMessages: Boolean,
-    isSearchOpen: Boolean,
-    hasEffectiveApiKey: Boolean,
     onOpenDrawer: () -> Unit,
     onOpenModelSelector: () -> Unit,
-    onOpenApiKeySettings: () -> Unit,
-    onToggleSearch: () -> Unit,
-    onExportThread: () -> Unit,
     onNewChat: () -> Unit
 ) {
     Row(
@@ -540,7 +735,7 @@ private fun AuraTopBar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -557,7 +752,6 @@ private fun AuraTopBar(
             )
         }
 
-        // Clean AMOLED Aura AI Mode Selector Pill
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(22.dp))
@@ -587,62 +781,17 @@ private fun AuraTopBar(
             )
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(
-                onClick = onOpenApiKeySettings,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("top_api_key_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Key,
-                    contentDescription = "Manage API Key",
-                    tint = if (hasEffectiveApiKey) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            if (hasMessages) {
-                IconButton(
-                    onClick = onToggleSearch,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("chat_search_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = "Search messages in chat",
-                        tint = if (isSearchOpen) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                IconButton(
-                    onClick = onExportThread,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("export_thread_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.IosShare,
-                        contentDescription = "Export chat thread as Markdown",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-            IconButton(
-                onClick = onNewChat,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("top_new_chat_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.EditNote,
-                    contentDescription = stringResource(R.string.cd_new_chat),
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
+        IconButton(
+            onClick = onNewChat,
+            modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("top_new_chat_button")
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.EditNote,
+                contentDescription = stringResource(R.string.cd_new_chat),
+                tint = MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }

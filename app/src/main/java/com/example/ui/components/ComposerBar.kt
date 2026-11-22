@@ -5,12 +5,15 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -22,37 +25,49 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.FolderShared
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.IosShare
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -65,6 +80,7 @@ import com.example.R
 import com.example.data.local.PersonaEntity
 import com.example.data.model.AURA_SLASH_COMMANDS
 import com.example.data.model.AiModelTier
+import com.example.data.model.AppLanguage
 import com.example.data.model.AttachmentDraft
 import com.example.data.model.CapabilityMode
 import com.example.data.model.SlashCommand
@@ -76,24 +92,21 @@ fun ComposerBar(
     attachment: AttachmentDraft?,
     selectedModel: AiModelTier,
     selectedCapability: CapabilityMode,
-    activePersona: PersonaEntity?,
+    selectedLanguage: AppLanguage,
     webSearchEnabled: Boolean,
     codeExecutionEnabled: Boolean,
-    isEnhancingPrompt: Boolean,
+    vaultRagActive: Boolean = false,
     isStreaming: Boolean,
     onTextChange: (String) -> Unit,
-    onSelectModel: (AiModelTier) -> Unit,
-    onSelectCapability: (CapabilityMode) -> Unit,
-    onToggleWebSearch: () -> Unit,
-    onToggleCodeExecution: () -> Unit,
-    onEnhancePrompt: () -> Unit,
+    onToggleDeepSearch: () -> Unit,
+    onToggleDeepThink: () -> Unit,
+    onOpenToolsSheet: () -> Unit,
     onApplySlashCommand: (SlashCommand) -> Unit,
-    onOpenPersonaStudio: () -> Unit,
     onPickImage: () -> Unit,
-    onPickFile: () -> Unit,
-    onVoiceInput: () -> Unit,
     onOpenLiveVoice: () -> Unit,
     onClearAttachment: () -> Unit,
+    onClearImagineMode: () -> Unit,
+    onClearSandboxMode: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
@@ -101,6 +114,8 @@ fun ComposerBar(
     val auraColors = LocalAuraColors.current
     val canSend = text.isNotBlank() || attachment != null
     val isImageActive = selectedModel.isImageModel
+    val isThinkActive = selectedCapability == CapabilityMode.DEEP_THINK
+
     val trimmedSlash = text.trimStart()
     val slashToken = if (!isImageActive && trimmedSlash.startsWith("/") && !trimmedSlash.contains('\n')) {
         trimmedSlash.substringBefore(' ').lowercase()
@@ -120,10 +135,10 @@ fun ComposerBar(
             .background(MaterialTheme.colorScheme.background)
             .navigationBarsPadding()
             .imePadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Slash Command Autocomplete Studio
+        // Slash Command Autocomplete Studio (only appears when typing `/`)
         AnimatedVisibility(visible = matchingCommands.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -143,24 +158,6 @@ fun ComposerBar(
                         .padding(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "AURA COMMANDS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "Tap to apply",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                     matchingCommands.take(5).forEach { cmd ->
                         Row(
                             modifier = Modifier
@@ -206,195 +203,7 @@ fun ComposerBar(
             }
         }
 
-        // Quick mode & Imagine toggle strip
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Imagine quick toggle pill (Aura Imagine)
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (isImageActive) MaterialTheme.colorScheme.secondaryContainer
-                        else MaterialTheme.colorScheme.surfaceContainerLow
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (isImageActive) MaterialTheme.colorScheme.secondary
-                        else MaterialTheme.colorScheme.outlineVariant,
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                    .clickable {
-                        if (isImageActive) {
-                            onSelectModel(AiModelTier.GEMINI_3_8_FLASH)
-                        } else {
-                            onSelectModel(AiModelTier.NANO_BANANA_2_1)
-                        }
-                    }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .testTag("toggle_imagine_mode"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Palette,
-                    contentDescription = null,
-                    tint = if (isImageActive) MaterialTheme.colorScheme.secondary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp)
-                )
-                Text(
-                    text = if (isImageActive) "Imagine ON" else "Create Image",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (isImageActive) MaterialTheme.colorScheme.onSecondaryContainer
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (!isImageActive) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(
-                            if (webSearchEnabled) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerLow
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = if (webSearchEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .clickable(onClick = onToggleWebSearch)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("toggle_web_search"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Public,
-                        contentDescription = null,
-                        tint = if (webSearchEnabled) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = if (webSearchEnabled) "Web ON" else "Web Search",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (webSearchEnabled) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(
-                            if (codeExecutionEnabled) auraColors.emeraldContainer
-                            else MaterialTheme.colorScheme.surfaceContainerLow
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = if (codeExecutionEnabled) auraColors.emerald.copy(alpha = 0.7f)
-                            else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .clickable(onClick = onToggleCodeExecution)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("toggle_code_execution"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Terminal,
-                        contentDescription = null,
-                        tint = if (codeExecutionEnabled) auraColors.emerald
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = if (codeExecutionEnabled) "Sandbox ON" else "Python Lab",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (codeExecutionEnabled) auraColors.emerald
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (activePersona != null) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
-                            .clickable(onClick = onOpenPersonaStudio)
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("active_persona_chip"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = activePersona.name,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-
-                CapabilityMode.entries.forEach { mode ->
-                    val selected = mode == selectedCapability
-                    val icon = when (mode) {
-                        CapabilityMode.DEEP_THINK -> Icons.Rounded.Psychology
-                        CapabilityMode.CODE_ARCHITECT -> Icons.Rounded.Code
-                        CapabilityMode.CONCISE -> Icons.Rounded.Tune
-                        CapabilityMode.STANDARD -> Icons.Rounded.AutoAwesome
-                    }
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(
-                                if (selected) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceContainerLow
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
-                                else MaterialTheme.colorScheme.outlineVariant,
-                                shape = RoundedCornerShape(20.dp)
-                            )
-                            .clickable { onSelectCapability(mode) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("capability_chip_${mode.id}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = if (selected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = mode.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        // AMOLED Aura AI Floating Pill Composer
+        // Minimal AMOLED Reference Composer Pill (matching clean reference layout)
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -402,74 +211,124 @@ fun ComposerBar(
                 .fillMaxWidth()
                 .border(
                     width = 1.dp,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(28.dp)
                 )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                AnimatedVisibility(visible = attachment != null) {
-                    attachment?.let { draft ->
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (draft.isImage) {
-                                AsyncImage(
-                                    model = Uri.parse(draft.uri),
-                                    contentDescription = draft.displayName,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                )
+                // Active attachment or special mode indicator inside pill
+                AnimatedVisibility(
+                    visible = attachment != null || isImageActive || codeExecutionEnabled ||
+                        selectedLanguage != AppLanguage.AUTO ||
+                        selectedCapability == CapabilityMode.DEEP_RESEARCH || vaultRagActive
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        attachment?.let { draft ->
+                            val totalPages = 1 + draft.extraImageUris.size
+                            val displayLabel = if (draft.extraImageUris.isNotEmpty() && !draft.displayName.contains("pages")) {
+                                "${draft.displayName} (+${draft.extraImageUris.size})"
+                            } else if (totalPages > 1 && !draft.displayName.contains("pages")) {
+                                "${draft.displayName} ($totalPages pages)"
                             } else {
-                                Icon(
-                                    imageVector = Icons.Rounded.Description,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                                draft.displayName
                             }
-                            Text(
-                                text = draft.displayName,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            IconButton(
-                                onClick = onClearAttachment,
-                                modifier = Modifier.size(24.dp)
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                if (draft.isImage) {
+                                    AsyncImage(
+                                        model = Uri.parse(draft.uri),
+                                        contentDescription = displayLabel,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Description,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Text(
+                                    text = displayLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
                                 Icon(
                                     imageVector = Icons.Rounded.Close,
                                     contentDescription = "Remove attachment",
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clickable(onClick = onClearAttachment)
                                 )
                             }
+                        }
+
+                        if (isImageActive) {
+                            MiniDismissBadge(
+                                label = "Imagine",
+                                onDismiss = onClearImagineMode
+                            )
+                        }
+                        if (!isImageActive && codeExecutionEnabled) {
+                            MiniDismissBadge(
+                                label = "Python Lab",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onClearSandboxMode
+                            )
+                        }
+                        if (!isImageActive && selectedCapability == CapabilityMode.DEEP_RESEARCH) {
+                            MiniDismissBadge(
+                                label = "Research Agent",
+                                onDismiss = onOpenToolsSheet
+                            )
+                        }
+                        if (!isImageActive && vaultRagActive) {
+                            MiniDismissBadge(
+                                label = "Vault RAG",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onOpenToolsSheet
+                            )
+                        }
+                        if (selectedLanguage != AppLanguage.AUTO) {
+                            MiniDismissBadge(
+                                label = selectedLanguage.nativeLabel,
+                                onDismiss = onOpenToolsSheet
+                            )
                         }
                     }
                 }
 
+                // Multi-line Input Field
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 34.dp, max = 140.dp)
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                        .heightIn(min = 28.dp, max = 148.dp)
+                        .padding(horizontal = 4.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (text.isEmpty()) {
                         Text(
-                            text = if (selectedModel.isImageModel) {
+                            text = if (isImageActive) {
                                 stringResource(R.string.composer_image_placeholder)
                             } else {
                                 stringResource(R.string.composer_placeholder)
@@ -493,84 +352,60 @@ fun ComposerBar(
                     )
                 }
 
+                // Reference Bottom Bar: [+] [Image] [Deep] [Think]   ---   [LiveVoice] [↑ Send]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        IconButton(
+                            onClick = onOpenToolsSheet,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("composer_tools_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "More tools, language & modes",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
                         IconButton(
                             onClick = onPickImage,
                             modifier = Modifier
-                                .minimumInteractiveComponentSize()
+                                .size(38.dp)
                                 .testTag("attach_image_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Image,
                                 contentDescription = stringResource(R.string.cd_attach_photo),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        if (!selectedModel.isImageModel) {
-                            IconButton(
-                                onClick = onPickFile,
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("attach_file_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.AttachFile,
-                                    contentDescription = stringResource(R.string.cd_attach_file),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = onVoiceInput,
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("voice_input_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Mic,
-                                contentDescription = stringResource(R.string.cd_voice_input),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(21.dp)
+
+                        if (!isImageActive) {
+                            ComposerModePill(
+                                icon = Icons.Rounded.Search,
+                                label = "Web",
+                                selected = webSearchEnabled,
+                                onClick = onToggleDeepSearch,
+                                tag = "toggle_web_search"
                             )
-                        }
-                        if (!isImageActive && !isStreaming) {
-                            Box(
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (trimmedSlash.startsWith("/")) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceContainerHigh
-                                    )
-                                    .clickable {
-                                        if (trimmedSlash.startsWith("/")) {
-                                            onTextChange(text.trimStart().removePrefix("/"))
-                                        } else {
-                                            onTextChange(if (text.isBlank()) "/" else "/$text")
-                                        }
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    .testTag("slash_commands_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "/",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (trimmedSlash.startsWith("/")) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+
+                            ComposerModePill(
+                                icon = Icons.Rounded.Psychology,
+                                label = "Think",
+                                selected = isThinkActive,
+                                onClick = onToggleDeepThink,
+                                tag = "toggle_deep_think"
+                            )
                         }
                     }
 
@@ -578,51 +413,11 @@ fun ComposerBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        AnimatedVisibility(
-                            visible = !isImageActive && !isStreaming && text.trim().length >= 4 && !trimmedSlash.startsWith("/")
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                    .border(
-                                        width = 1.dp,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-                                        shape = CircleShape
-                                    )
-                                    .clickable(enabled = !isEnhancingPrompt, onClick = onEnhancePrompt)
-                                    .testTag("enhance_prompt_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isEnhancingPrompt) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Rounded.AutoFixHigh,
-                                        contentDescription = "Enhance prompt with Aura AI",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(40.dp)
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .border(
-                                    width = 1.dp,
-                                    color = auraColors.sparkleStart.copy(alpha = 0.45f),
-                                    shape = CircleShape
-                                )
                                 .clickable(onClick = onOpenLiveVoice)
                                 .testTag("live_voice_button"),
                             contentAlignment = Alignment.Center
@@ -653,34 +448,495 @@ fun ComposerBar(
                                 )
                             }
                         } else {
-                            val sendBrush = if (canSend) {
-                                Brush.linearGradient(
-                                    colors = listOf(auraColors.sparkleStart, auraColors.sparkleMid)
-                                )
-                            } else {
-                                SolidColor(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            }
+                            val sendBg = if (canSend) Color.White else MaterialTheme.colorScheme.surfaceContainerHigh
+                            val sendTint = if (canSend) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                             Box(
                                 modifier = Modifier
                                     .size(42.dp)
                                     .clip(CircleShape)
-                                    .background(brush = sendBrush)
+                                    .background(sendBg)
                                     .clickable(enabled = canSend, onClick = onSend)
                                     .testTag("send_message_button"),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.Send,
+                                    imageVector = Icons.Rounded.ArrowUpward,
                                     contentDescription = stringResource(R.string.cd_send_message),
-                                    tint = if (canSend) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(19.dp)
+                                    tint = sendTint,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ComposerModePill(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    tag: String
+) {
+    Row(
+        modifier = Modifier
+            .heightIn(min = 34.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(15.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun MiniDismissBadge(
+    label: String,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
+    onDismiss: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(accentColor.copy(alpha = 0.14f))
+            .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = accentColor
+        )
+        Icon(
+            imageVector = Icons.Rounded.Close,
+            contentDescription = "Disable $label",
+            tint = accentColor,
+            modifier = Modifier.size(12.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun AuraToolsSheet(
+    selectedLanguage: AppLanguage,
+    selectedCapability: CapabilityMode,
+    selectedModel: AiModelTier,
+    activePersona: PersonaEntity?,
+    codeExecutionEnabled: Boolean,
+    hasMessages: Boolean,
+    canEnhancePrompt: Boolean,
+    isEnhancingPrompt: Boolean,
+    hasEffectiveApiKey: Boolean,
+    memoryCount: Int = 0,
+    vaultDocCount: Int = 0,
+    onSelectLanguage: (AppLanguage) -> Unit,
+    onSelectCapability: (CapabilityMode) -> Unit,
+    onToggleImagineMode: () -> Unit,
+    onToggleCodeExecution: () -> Unit,
+    onPickFile: () -> Unit,
+    onOpenScanner: () -> Unit = {},
+    onOpenWhisperAudio: () -> Unit = {},
+    onOpenKnowledgeVault: () -> Unit = {},
+    onOpenMemoryVault: () -> Unit = {},
+    onVoiceDictation: () -> Unit,
+    onInsertSlashCommand: () -> Unit,
+    onEnhancePrompt: () -> Unit,
+    onOpenPersonaStudio: () -> Unit,
+    onToggleInChatSearch: () -> Unit,
+    onExportThread: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val auraColors = LocalAuraColors.current
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Tools & Languages",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            // Response Language Picker (Auto / Marathi / Hindi / English)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Translate,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "RESPONSE LANGUAGE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AppLanguage.entries.forEach { lang ->
+                        val active = lang == selectedLanguage
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (active) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .clip(RoundedCornerShape(16.dp))
+                                .border(
+                                    1.dp,
+                                    if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable {
+                                    onSelectLanguage(lang)
+                                    onDismiss()
+                                }
+                                .testTag("language_option_${lang.id}")
+                        ) {
+                            Text(
+                                text = lang.nativeLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Capability Modes
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "INTELLIGENCE STYLE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CapabilityMode.entries.forEach { mode ->
+                        val active = mode == selectedCapability
+                        val icon = when (mode) {
+                            CapabilityMode.STANDARD -> Icons.Rounded.AutoAwesome
+                            CapabilityMode.DEEP_THINK -> Icons.Rounded.Psychology
+                            CapabilityMode.CODE_ARCHITECT -> Icons.Rounded.Code
+                            CapabilityMode.DEEP_RESEARCH -> Icons.Rounded.TravelExplore
+                            CapabilityMode.CONCISE -> Icons.Rounded.Tune
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (active) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .border(
+                                    1.dp,
+                                    if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable {
+                                    onSelectCapability(mode)
+                                    onDismiss()
+                                }
+                                .testTag("capability_chip_${mode.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = if (active) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = mode.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Action Grid Items
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "WORKSPACE ACTIONS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Palette,
+                        title = if (selectedModel.isImageModel) "Imagine ON" else "Create Image",
+                        highlighted = selectedModel.isImageModel,
+                        onClick = {
+                            onToggleImagineMode()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_imagine_mode")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Terminal,
+                        title = if (codeExecutionEnabled) "Python ON" else "Python Lab",
+                        highlighted = codeExecutionEnabled,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onToggleCodeExecution()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_code_execution")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.DocumentScanner,
+                        title = "PDF & Paper Scan",
+                        onClick = {
+                            onDismiss()
+                            onOpenScanner()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_scanner_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.GraphicEq,
+                        title = "Whisper Audio",
+                        onClick = {
+                            onDismiss()
+                            onOpenWhisperAudio()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_whisper_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.FolderShared,
+                        title = if (vaultDocCount > 0) "Vault ($vaultDocCount)" else "Doc Vault (RAG)",
+                        highlighted = vaultDocCount > 0,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onDismiss()
+                            onOpenKnowledgeVault()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_knowledge_vault_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Psychology,
+                        title = if (memoryCount > 0) "Memory ($memoryCount)" else "Memory Vault",
+                        highlighted = memoryCount > 0,
+                        onClick = {
+                            onDismiss()
+                            onOpenMemoryVault()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_memory_vault_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.AttachFile,
+                        title = "Attach File",
+                        onClick = {
+                            onDismiss()
+                            onPickFile()
+                        },
+                        modifier = Modifier.weight(1f).testTag("attach_file_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Mic,
+                        title = "Quick Dictate",
+                        onClick = {
+                            onDismiss()
+                            onVoiceDictation()
+                        },
+                        modifier = Modifier.weight(1f).testTag("voice_input_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Code,
+                        title = "Slash / Commands",
+                        onClick = {
+                            onDismiss()
+                            onInsertSlashCommand()
+                        },
+                        modifier = Modifier.weight(1f).testTag("slash_commands_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.AutoAwesome,
+                        title = activePersona?.name ?: "Personas",
+                        onClick = {
+                            onDismiss()
+                            onOpenPersonaStudio()
+                        },
+                        modifier = Modifier.weight(1f).testTag("active_persona_chip")
+                    )
+                }
+
+                if (canEnhancePrompt) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.AutoFixHigh,
+                        title = if (isEnhancingPrompt) "Enhancing Prompt…" else "Sharpen Draft Prompt with Aura AI",
+                        highlighted = true,
+                        isBusy = isEnhancingPrompt,
+                        onClick = {
+                            onEnhancePrompt()
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("enhance_prompt_button")
+                    )
+                }
+
+                if (hasMessages) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ToolActionCard(
+                            icon = Icons.Rounded.Search,
+                            title = "Search Chat",
+                            onClick = {
+                                onDismiss()
+                                onToggleInChatSearch()
+                            },
+                            modifier = Modifier.weight(1f).testTag("chat_search_button")
+                        )
+                        ToolActionCard(
+                            icon = Icons.Rounded.IosShare,
+                            title = "Export .md",
+                            onClick = {
+                                onDismiss()
+                                onExportThread()
+                            },
+                            modifier = Modifier.weight(1f).testTag("export_thread_button")
+                        )
+                    }
+                }
+
+                ToolActionCard(
+                    icon = Icons.Rounded.Key,
+                    title = if (hasEffectiveApiKey) "API Key & Theme Settings" else "Add & Save API Key",
+                    highlighted = !hasEffectiveApiKey,
+                    accent = if (!hasEffectiveApiKey) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    onClick = {
+                        onDismiss()
+                        onOpenSettings()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("tools_api_key_settings_button")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun ToolActionCard(
+    icon: ImageVector,
+    title: String,
+    highlighted: Boolean = false,
+    isBusy: Boolean = false,
+    accent: Color = MaterialTheme.colorScheme.primary,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (highlighted) accent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .clip(RoundedCornerShape(16.dp))
+            .border(
+                1.dp,
+                if (highlighted) accent.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (isBusy) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = accent)
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (highlighted) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (highlighted) accent else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

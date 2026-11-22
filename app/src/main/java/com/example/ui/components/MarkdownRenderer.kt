@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.HorizontalDivider
@@ -59,6 +60,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import com.example.R
+import com.example.ui.screens.ArtifactPreviewDialog
+import com.example.ui.screens.isPreviewableArtifactLanguage
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.delay
@@ -365,6 +368,8 @@ private fun CodeBlockCard(
     val errorColor = MaterialTheme.colorScheme.error
     var copied by remember { mutableStateOf(false) }
     var showFullScreen by remember { mutableStateOf(false) }
+    var showArtifactPreview by remember { mutableStateOf(false) }
+    val canPreview = remember(language) { isPreviewableArtifactLanguage(language) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -421,6 +426,30 @@ private fun CodeBlockCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                if (canPreview) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(auraColors.emeraldContainer)
+                            .clickable { showArtifactPreview = true }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("preview_artifact_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = "Preview live artifact",
+                            tint = auraColors.emerald,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Preview",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = auraColors.emerald
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -493,6 +522,14 @@ private fun CodeBlockCard(
             code = code,
             highlightedCode = highlightedCode,
             onDismiss = { showFullScreen = false }
+        )
+    }
+
+    if (showArtifactPreview) {
+        ArtifactPreviewDialog(
+            language = language,
+            code = code,
+            onDismiss = { showArtifactPreview = false }
         )
     }
 }

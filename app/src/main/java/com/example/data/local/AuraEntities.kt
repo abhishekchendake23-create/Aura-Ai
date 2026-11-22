@@ -57,3 +57,42 @@ data class PersonaEntity(
     val isCustom: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "memories")
+data class MemoryEntity(
+    @PrimaryKey val id: String,
+    val content: String,
+    val category: String = "General",
+    val isEnabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "knowledge_docs")
+data class KnowledgeDocEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val sourceType: String, // "PDF", "Scan", "Text", "Note"
+    val chunkCount: Int,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "knowledge_chunks",
+    foreignKeys = [
+        ForeignKey(
+            entity = KnowledgeDocEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["docId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["docId"])]
+)
+data class KnowledgeChunkEntity(
+    @PrimaryKey val id: String,
+    val docId: String,
+    val docTitle: String,
+    val chunkIndex: Int,
+    val content: String
+)

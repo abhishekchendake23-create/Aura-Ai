@@ -2,6 +2,9 @@ package com.example.data.repository
 
 import com.example.data.local.AuraDao
 import com.example.data.local.ConversationEntity
+import com.example.data.local.KnowledgeChunkEntity
+import com.example.data.local.KnowledgeDocEntity
+import com.example.data.local.MemoryEntity
 import com.example.data.local.MessageEntity
 import com.example.data.local.PersonaEntity
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +20,10 @@ class ChatRepository(private val dao: AuraDao) {
     fun observeBookmarkedMessages(): Flow<List<MessageEntity>> = dao.observeBookmarkedMessages()
 
     fun observePersonas(): Flow<List<PersonaEntity>> = dao.observePersonas()
+
+    fun observeMemories(): Flow<List<MemoryEntity>> = dao.observeMemories()
+
+    fun observeKnowledgeDocs(): Flow<List<KnowledgeDocEntity>> = dao.observeKnowledgeDocs()
 
     suspend fun ensureDefaultPersonas() {
         dao.upsertPersonas(defaultPersonas())
@@ -96,6 +103,44 @@ class ChatRepository(private val dao: AuraDao) {
     }
 
     suspend fun deleteCustomPersona(id: String) = dao.deleteCustomPersona(id)
+
+    // Personal Memory Vault ("Aura Remembers")
+    suspend fun getActiveMemoriesOnce(): List<MemoryEntity> = dao.getActiveMemoriesOnce()
+
+    suspend fun addMemory(content: String, category: String = "General"): MemoryEntity {
+        val now = System.currentTimeMillis()
+        val memory = MemoryEntity(
+            id = UUID.randomUUID().toString(),
+            content = content.trim(),
+            category = category.trim().ifBlank { "General" },
+            isEnabled = true,
+            createdAt = now,
+            updatedAt = now
+        )
+        dao.upsertMemory(memory)
+        return memory
+    }
+
+    suspend fun toggleMemory(id: String, currentEnabled: Boolean) =
+        dao.setMemoryEnabled(id, !currentEnabled)
+
+    suspend fun deleteMemory(id: String) = dao.deleteMemory(id)
+
+    // Private Document Knowledge Vault (On-Device RAG)
+    suspend fun getAllKnowledgeChunksOnce(): List<KnowledgeChunkEntity> =
+        dao.getAllKnowledgeChunksOnce()
+
+    suspend fun saveKnowledgeDocument(
+        doc: KnowledgeDocEntity,
+        chunks: List<KnowledgeChunkEntity>
+    ) {
+        dao.upsertKnowledgeDoc(doc)
+        if (chunks.isNotEmpty()) {
+            dao.upsertKnowledgeChunks(chunks)
+        }
+    }
+
+    suspend fun deleteKnowledgeDoc(docId: String) = dao.deleteKnowledgeDoc(docId)
 
     private fun defaultPersonas(): List<PersonaEntity> = listOf(
         PersonaEntity(

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
@@ -166,6 +167,7 @@ fun AssistantMessageBlock(
     onToggleBookmark: () -> Unit,
     onEditGeneratedImage: (String) -> Unit,
     onFollowUpPrompt: (String) -> Unit = {},
+    onSaveToMemory: (String) -> Unit = {},
     onShare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -226,7 +228,12 @@ fun AssistantMessageBlock(
                         message.content
                             .replace(Regex("https?://\\S+"), "")
                             .replace(Regex("gemini[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("groq[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("(meta-)?llama[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("(openai/)?gpt-oss[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("openai", RegexOption.IGNORE_CASE), "Abhynex")
                             .replace(Regex("generativelanguage\\.googleapis\\.com\\S*", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("api\\.groq\\.com\\S*", RegexOption.IGNORE_CASE), "")
                             .replace(Regex("google", RegexOption.IGNORE_CASE), "Abhynex")
                             .replace(Regex("\\s+"), " ")
                             .trim()
@@ -446,6 +453,22 @@ fun AssistantMessageBlock(
                     modifier = Modifier.size(18.dp)
                 )
             }
+
+            if (message.content.isNotBlank()) {
+                IconButton(
+                    onClick = { onSaveToMemory(message.content) },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("save_memory_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Psychology,
+                        contentDescription = "Save insight to Aura Memory",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
         }
 
         if (isLatestAssistantMessage && message.content.isNotBlank() && message.generatedImagePath.isNullOrBlank()) {
@@ -599,23 +622,11 @@ private fun AssistantHeaderRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        GeminiSparkleIcon(size = 22.dp, animate = isStreaming)
+        GeminiSparkleIcon(size = 20.dp, animate = isStreaming)
         Text(
-            text = "Aura AI",
+            text = modelName.ifBlank { "Aura AI" },
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        ) {
-            Text(
-                text = "Abhynex",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }

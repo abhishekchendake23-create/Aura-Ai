@@ -18,13 +18,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -37,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -53,6 +57,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AppLanguage
 import com.example.data.model.ThemeMode
 import com.example.ui.theme.LocalAuraColors
 
@@ -60,10 +65,19 @@ import com.example.ui.theme.LocalAuraColors
 @Composable
 fun SettingsSheet(
     themeMode: ThemeMode,
+    selectedLanguage: AppLanguage,
     savedApiKey: String,
     hasEffectiveApiKey: Boolean,
+    savedGroqApiKey: String,
+    hasEffectiveGroqApiKey: Boolean,
+    preferFastGroq: Boolean,
     onSelectTheme: (ThemeMode) -> Unit,
+    onSelectLanguage: (AppLanguage) -> Unit,
     onSaveApiKey: (String) -> Unit,
+    onSaveGroqApiKey: (String) -> Unit,
+    onSetPreferFastGroq: (Boolean) -> Unit,
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
     onClearAllHistory: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -72,10 +86,17 @@ fun SettingsSheet(
     var showClearConfirm by remember { mutableStateOf(false) }
     var apiKeyInput by remember(savedApiKey) { mutableStateOf(savedApiKey) }
     var revealKey by remember { mutableStateOf(false) }
+    var groqKeyInput by remember(savedGroqApiKey) { mutableStateOf(savedGroqApiKey) }
+    var revealGroqKey by remember { mutableStateOf(false) }
 
     LaunchedEffect(savedApiKey) {
         if (apiKeyInput.isBlank() && savedApiKey.isNotBlank()) {
             apiKeyInput = savedApiKey
+        }
+    }
+    LaunchedEffect(savedGroqApiKey) {
+        if (groqKeyInput.isBlank() && savedGroqApiKey.isNotBlank()) {
+            groqKeyInput = savedGroqApiKey
         }
     }
 
@@ -244,6 +265,185 @@ fun SettingsSheet(
                 }
             }
 
+            // Fast Engine Key (Groq) for ultra-fast responses & automatic fallback
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(
+                        width = 1.dp,
+                        color = if (hasEffectiveGroqApiKey) auraColors.emerald.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.outlineVariant,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Bolt,
+                            contentDescription = null,
+                            tint = if (hasEffectiveGroqApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Fast Engine Key (Groq)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (hasEffectiveGroqApiKey) auraColors.emeraldContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                savedGroqApiKey.isNotBlank() -> "Fast + Fallback ON"
+                                hasEffectiveGroqApiKey -> "Built-in Ready"
+                                else -> "Optional"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (hasEffectiveGroqApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Paste your Groq key (gsk_...) for ultra-fast answers and automatic fallback if primary servers are busy.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = groqKeyInput,
+                    onValueChange = { groqKeyInput = it },
+                    singleLine = true,
+                    placeholder = { Text("Paste gsk_... Groq key") },
+                    visualTransformation = if (revealGroqKey) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row {
+                            if (groqKeyInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { groqKeyInput = "" },
+                                    modifier = Modifier.testTag("clear_groq_api_key_input")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear Groq input",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { revealGroqKey = !revealGroqKey },
+                                modifier = Modifier.testTag("toggle_reveal_groq_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = if (revealGroqKey) Icons.Rounded.VisibilityOff
+                                    else Icons.Rounded.Visibility,
+                                    contentDescription = if (revealGroqKey) "Hide Groq key" else "Show Groq key",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("groq_api_key_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSaveGroqApiKey(groqKeyInput)
+                            onDismiss()
+                        },
+                        enabled = groqKeyInput.isNotBlank() && groqKeyInput.trim() != savedGroqApiKey,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_groq_api_key_button")
+                    ) {
+                        Text(
+                            if (savedGroqApiKey.isNotBlank() && groqKeyInput.trim() == savedGroqApiKey) "Saved"
+                            else "Save Groq Key"
+                        )
+                    }
+
+                    if (savedGroqApiKey.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                groqKeyInput = ""
+                                onSaveGroqApiKey("")
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.testTag("remove_saved_groq_api_key_button")
+                        ) {
+                            Text("Remove")
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .clickable { onSetPreferFastGroq(!preferFastGroq) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "Prioritize Fast Speed (Groq First)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Uses Groq's fastest models first; fallback is always active.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = preferFastGroq,
+                        onCheckedChange = onSetPreferFastGroq,
+                        modifier = Modifier.testTag("prefer_fast_groq_switch")
+                    )
+                }
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = "APPEARANCE",
@@ -299,6 +499,48 @@ fun SettingsSheet(
                 }
             }
 
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "RESPONSE LANGUAGE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AppLanguage.entries.forEach { lang ->
+                        val selected = lang == selectedLanguage
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceContainer
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .clickable { onSelectLanguage(lang) }
+                                .padding(vertical = 11.dp, horizontal = 6.dp)
+                                .testTag("settings_lang_${lang.id}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = lang.nativeLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -328,6 +570,61 @@ fun SettingsSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+
+            // Portable Offline Full Backup & Restore (.json)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Portable Backup & Restore (.json)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Export or restore all chats, memories, custom personas, and Knowledge Vault documents locally without any cloud account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onExportBackup,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("export_backup_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = null,
+                            modifier = Modifier.padding(end = 6.dp).size(16.dp)
+                        )
+                        Text("Export")
+                    }
+                    OutlinedButton(
+                        onClick = onImportBackup,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("import_backup_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.UploadFile,
+                            contentDescription = null,
+                            modifier = Modifier.padding(end = 6.dp).size(16.dp)
+                        )
+                        Text("Restore")
+                    }
+                }
             }
 
             OutlinedButton(

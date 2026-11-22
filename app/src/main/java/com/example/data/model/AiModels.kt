@@ -6,6 +6,48 @@ enum class ThemeMode(val label: String) {
     SYSTEM("Match System")
 }
 
+enum class AppLanguage(
+    val id: String,
+    val label: String,
+    val nativeLabel: String,
+    val speechLocaleTag: String,
+    val promptInstruction: String
+) {
+    AUTO(
+        id = "auto",
+        label = "Auto",
+        nativeLabel = "Auto",
+        speechLocaleTag = "",
+        promptInstruction = "Automatically match the user's language and script naturally (English, Devanagari Marathi मराठी, Romanized Marathi e.g. 'kasa ahes', Devanagari Hindi हिन्दी, or Hinglish)."
+    ),
+    MARATHI(
+        id = "mr",
+        label = "Marathi",
+        nativeLabel = "मराठी",
+        speechLocaleTag = "mr-IN",
+        promptInstruction = "Respond primarily in natural, fluent Marathi (मराठी) using clear Devanagari script (or match Romanized Marathi if the user prefers), while keeping code blocks, technical symbols, and KaTeX formulas crisp and accurate."
+    ),
+    HINDI(
+        id = "hi",
+        label = "Hindi",
+        nativeLabel = "हिन्दी",
+        speechLocaleTag = "hi-IN",
+        promptInstruction = "Respond primarily in natural, fluent Hindi (हिन्दी) using clear Devanagari script (or match Hinglish if preferred), while keeping code blocks, technical symbols, and KaTeX formulas crisp and accurate."
+    ),
+    ENGLISH(
+        id = "en",
+        label = "English",
+        nativeLabel = "English",
+        speechLocaleTag = "en-US",
+        promptInstruction = "Respond in crisp, clear, authoritative English."
+    );
+
+    companion object {
+        fun fromId(id: String): AppLanguage =
+            entries.find { it.id == id } ?: AUTO
+    }
+}
+
 enum class ModelCategory(val title: String) {
     CHAT_AND_VISION("Aura Intelligence Modes"),
     IMAGE_GENERATION("Aura Imagine · Visual Creation")
@@ -21,6 +63,15 @@ enum class AiModelTier(
     val category: ModelCategory,
     val isImageModel: Boolean = false
 ) {
+    AUTO_ROUTER(
+        id = "aura-auto-router",
+        displayName = "Aura Auto Router",
+        shortName = "Auto Smart",
+        subtitle = "Automatically routes quick chats to ultra-fast and hard tasks to deep reasoning",
+        badge = "AUTO",
+        contextLabel = "Abhynex",
+        category = ModelCategory.CHAT_AND_VISION
+    ),
     GEMINI_3_8_FLASH(
         id = "gemini-3.8-flash",
         displayName = "Aura Core",
@@ -93,6 +144,7 @@ enum class CapabilityMode(
     STANDARD("standard", "Balanced", "Clear, natural Aura AI responses"),
     DEEP_THINK("deep_think", "Deep Think", "Step-by-step visible reasoning before final answer"),
     CODE_ARCHITECT("code", "Code Studio", "Production code, architecture & edge cases"),
+    DEEP_RESEARCH("deep_research", "Research", "Multi-step agentic web search & cited executive report"),
     CONCISE("concise", "Concise", "Crisp executive summary & bullet points");
 
     companion object {
@@ -155,7 +207,8 @@ data class AttachmentDraft(
     val uri: String,
     val displayName: String,
     val isImage: Boolean,
-    val textSnippet: String? = null
+    val textSnippet: String? = null,
+    val extraImageUris: List<String> = emptyList()
 )
 
 data class PromptStarter(
@@ -168,6 +221,13 @@ data class PromptStarter(
     val suggestedMode: CapabilityMode = CapabilityMode.STANDARD
 )
 
+enum class SlashCommandSpecialAction {
+    NONE,
+    OPEN_SCANNER,
+    OPEN_VAULT,
+    OPEN_MEMORY
+}
+
 data class SlashCommand(
     val trigger: String,
     val title: String,
@@ -175,10 +235,19 @@ data class SlashCommand(
     val promptPrefix: String,
     val suggestedMode: CapabilityMode,
     val requiresWeb: Boolean = false,
-    val requiresSandbox: Boolean = false
+    val requiresSandbox: Boolean = false,
+    val specialAction: SlashCommandSpecialAction = SlashCommandSpecialAction.NONE
 )
 
 val AURA_SLASH_COMMANDS = listOf(
+    SlashCommand(
+        trigger = "/research",
+        title = "Deep Research Agent",
+        subtitle = "Multi-step web investigation + cited executive report",
+        promptPrefix = "Conduct deep multi-angle research, cross-verify facts, compare trade-offs in Markdown tables, and produce an authoritative cited report on:\n",
+        suggestedMode = CapabilityMode.DEEP_RESEARCH,
+        requiresWeb = true
+    ),
     SlashCommand(
         trigger = "/arch",
         title = "System & Code Architect",
@@ -224,6 +293,30 @@ val AURA_SLASH_COMMANDS = listOf(
         requiresWeb = true
     ),
     SlashCommand(
+        trigger = "/scan",
+        title = "PDF & Paper Scanner",
+        subtitle = "Scan multi-page PDFs or exam papers (Q1..QN)",
+        promptPrefix = "",
+        suggestedMode = CapabilityMode.DEEP_THINK,
+        specialAction = SlashCommandSpecialAction.OPEN_SCANNER
+    ),
+    SlashCommand(
+        trigger = "/vault",
+        title = "Private Document Vault",
+        subtitle = "Query your offline indexed PDFs & notes (RAG)",
+        promptPrefix = "",
+        suggestedMode = CapabilityMode.STANDARD,
+        specialAction = SlashCommandSpecialAction.OPEN_VAULT
+    ),
+    SlashCommand(
+        trigger = "/remember",
+        title = "Save to Aura Memory",
+        subtitle = "Remember a preference, goal or fact across chats",
+        promptPrefix = "Remember this about me: ",
+        suggestedMode = CapabilityMode.STANDARD,
+        specialAction = SlashCommandSpecialAction.OPEN_MEMORY
+    ),
+    SlashCommand(
         trigger = "/ui",
         title = "Jetpack Compose AMOLED UI",
         subtitle = "Material 3 Compose screen + ViewModel StateFlow",
@@ -240,6 +333,15 @@ val AURA_SLASH_COMMANDS = listOf(
 )
 
 val DEFAULT_PROMPT_STARTERS = listOf(
+    PromptStarter(
+        id = "deep_research_agent",
+        title = "Deep Research Agent",
+        subtitle = "Multi-angle web report + trade-offs",
+        prompt = "Research and compare the top local-first Android AI architectures in 2025–2026: on-device SLM vs edge hybrid routing, latency benchmarks, and a Markdown decision matrix.",
+        category = "Research",
+        suggestedModel = AiModelTier.AUTO_ROUTER,
+        suggestedMode = CapabilityMode.DEEP_RESEARCH
+    ),
     PromptStarter(
         id = "code_arch",
         title = "Staff Engineer Code Studio",
@@ -259,13 +361,13 @@ val DEFAULT_PROMPT_STARTERS = listOf(
         suggestedMode = CapabilityMode.DEEP_THINK
     ),
     PromptStarter(
-        id = "deep_reason",
-        title = "System Architecture Audit",
-        subtitle = "Latency, caching & trade-off matrix",
-        prompt = "Compare edge caching vs server-side streaming for a mobile AI assistant. Provide a Markdown trade-off table, failure modes, and recommended architecture.",
-        category = "Analyze",
-        suggestedModel = AiModelTier.GEMINI_3_8_FLASH,
-        suggestedMode = CapabilityMode.DEEP_THINK
+        id = "live_diagram",
+        title = "Interactive Flow & HTML Lab",
+        subtitle = "Preview live Mermaid & SVG diagrams",
+        prompt = "Create an interactive HTML + SVG dark AMOLED solar system explorer card and a Mermaid architecture flowchart showing how Aura AI processes requests.",
+        category = "Artifact",
+        suggestedModel = AiModelTier.AUTO_ROUTER,
+        suggestedMode = CapabilityMode.CODE_ARCHITECT
     ),
     PromptStarter(
         id = "imagine_art",

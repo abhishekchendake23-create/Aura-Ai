@@ -29,8 +29,11 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.FolderShared
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -68,6 +71,8 @@ fun ChatDrawerContent(
     activeConversationId: String?,
     searchQuery: String,
     bookmarkCount: Int,
+    memoryCount: Int = 0,
+    vaultDocCount: Int = 0,
     onSearchQueryChange: (String) -> Unit,
     onNewChat: () -> Unit,
     onSelectConversation: (ConversationEntity) -> Unit,
@@ -77,6 +82,9 @@ fun ChatDrawerContent(
     onOpenPersonaStudio: () -> Unit,
     onOpenSavedLibrary: () -> Unit,
     onOpenLiveVoice: () -> Unit,
+    onOpenScanner: () -> Unit = {},
+    onOpenKnowledgeVault: () -> Unit = {},
+    onOpenMemoryVault: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -201,6 +209,30 @@ fun ChatDrawerContent(
                 subtitle = "$bookmarkCount saved items",
                 onClick = onOpenSavedLibrary,
                 tag = "drawer_saved_library"
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            DrawerNavShortcut(
+                icon = Icons.Rounded.DocumentScanner,
+                title = "PDF & Paper Scanner",
+                subtitle = "Scan multi-page PDF & solve Q1..QN",
+                onClick = onOpenScanner,
+                tag = "drawer_scanner"
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            DrawerNavShortcut(
+                icon = Icons.Rounded.FolderShared,
+                title = "Document Vault (RAG)",
+                subtitle = "$vaultDocCount offline indexed docs",
+                onClick = onOpenKnowledgeVault,
+                tag = "drawer_knowledge_vault"
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            DrawerNavShortcut(
+                icon = Icons.Rounded.Psychology,
+                title = "Aura Memory Vault",
+                subtitle = "$memoryCount saved facts remembered",
+                onClick = onOpenMemoryVault,
+                tag = "drawer_memory_vault"
             )
 
             HorizontalDivider(
