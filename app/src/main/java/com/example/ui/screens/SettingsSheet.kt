@@ -213,7 +213,7 @@ fun SettingsSheet(
                 }
 
                 Text(
-                    text = "Unlocks all free Gemini 2.5, 2.0 & Gemma 3 models with automatic failover.",
+                    text = "Paste 1 or multiple keys separated by comma or new line — Aura automatically rotates keys on rate limits.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -221,8 +221,8 @@ fun SettingsSheet(
                 OutlinedTextField(
                     value = apiKeyInput,
                     onValueChange = { apiKeyInput = it },
-                    singleLine = true,
-                    placeholder = { Text("Paste API key...") },
+                    maxLines = 3,
+                    placeholder = { Text("Paste 1 or more API keys...") },
                     visualTransformation = if (revealKey) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -358,7 +358,7 @@ fun SettingsSheet(
                 }
 
                 Text(
-                    text = "Paste your Groq key (gsk_...) for ultra-fast answers and automatic fallback if primary servers are busy.",
+                    text = "Paste 1 or more Groq keys (comma/newline separated) for ultra-fast responses & automatic key rotation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -366,8 +366,8 @@ fun SettingsSheet(
                 OutlinedTextField(
                     value = groqKeyInput,
                     onValueChange = { groqKeyInput = it },
-                    singleLine = true,
-                    placeholder = { Text("Paste gsk_... Groq key") },
+                    maxLines = 3,
+                    placeholder = { Text("Paste gsk_... Groq key(s)") },
                     visualTransformation = if (revealGroqKey) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -541,7 +541,7 @@ fun SettingsSheet(
                 }
 
                 Text(
-                    text = "Paste a free OpenRouter key (sk-or-...) for DeepSeek R1 0528 (:free), V3 0324 (:free) & Chimera, or an optional direct DeepSeek key (sk-...). If unset, Aura automatically fails over to Gemini/Groq.",
+                    text = "Paste 1 or more OpenRouter (sk-or-...) or DeepSeek (sk-...) keys separated by comma or new line for automatic rotation & failover.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -549,8 +549,8 @@ fun SettingsSheet(
                 OutlinedTextField(
                     value = openRouterKeyInput,
                     onValueChange = { openRouterKeyInput = it },
-                    singleLine = true,
-                    placeholder = { Text("Paste sk-or-... OpenRouter key") },
+                    maxLines = 3,
+                    placeholder = { Text("Paste sk-or-... OpenRouter key(s)") },
                     visualTransformation = if (revealOpenRouterKey) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -764,7 +764,7 @@ fun SettingsSheet(
                 }
 
                 Text(
-                    text = "Paste your Exa API key (or set EXA_API_KEY in Secrets) for high-accuracy live web search, news, and page content grounding.",
+                    text = "Paste 1 or more Exa API keys (comma/newline separated) for neural live web search & automatic key rotation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -772,8 +772,8 @@ fun SettingsSheet(
                 OutlinedTextField(
                     value = exaKeyInput,
                     onValueChange = { exaKeyInput = it },
-                    singleLine = true,
-                    placeholder = { Text("Paste Exa API key...") },
+                    maxLines = 3,
+                    placeholder = { Text("Paste Exa API key(s)...") },
                     visualTransformation = if (revealExaKey) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     trailingIcon = {

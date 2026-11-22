@@ -561,4 +561,155 @@ class ExampleRobolectricTest {
         prefs.setUserOpenRouterApiKey("")
         prefs.setUserDeepSeekApiKey("")
     }
+
+    @Test
+    fun `multi-key pool parsing merges comma and newline keys and toggles persist cleanly`() = runTest {
+        val parsed = com.example.data.preferences.PreferencesManager.parseApiKeyPool(
+            "key_alpha, key_beta\nkey_gamma; YOUR_GEMINI_API_KEY key_alpha"
+        )
+        assertEquals(listOf("key_alpha", "key_beta", "key_gamma"), parsed)
+
+        val merged = com.example.data.preferences.PreferencesManager.mergeKeyPool(
+            "key_one, key_two",
+            "key_two, key_three"
+        )
+        assertEquals(listOf("key_one", "key_two", "key_three"), merged)
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.preferences.PreferencesManager(context)
+        assertFalse(prefs.selfVerifyEnabled.first())
+        assertFalse(prefs.liveVoiceReadoutEnabled.first())
+
+        prefs.setSelfVerifyEnabled(true)
+        prefs.setLiveVoiceReadoutEnabled(true)
+        assertTrue(prefs.selfVerifyEnabled.first())
+        assertTrue(prefs.liveVoiceReadoutEnabled.first())
+
+        prefs.setSelfVerifyEnabled(false)
+        prefs.setLiveVoiceReadoutEnabled(false)
+    }
+
+    @Test
+    fun `project zip reader extracts safe code files, blocks zip slip and build dirs, and formats context`() {
+        val baos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(baos).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("src/Main.kt"))
+            zos.write("fun main() { println(\"Aura\") }".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry("../../etc/passwd"))
+            zos.write("root:x:0:0".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry("build/generated/Temp.kt"))
+            zos.write("class Ignored".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry(".git/config"))
+            zos.write("[core]".toByteArray())
+            zos.closeEntry()
+        }
+
+        val extracted = com.example.data.repository.ProjectZipReader.extractReadableFilesFromZipBytes(baos.toByteArray())
+        assertEquals(1, extracted.size)
+        assertEquals("src/Main.kt", extracted.first().first)
+        assertTrue(extracted.first().second.contains("println(\"Aura\")"))
+
+        val formatted = com.example.data.repository.ProjectZipReader.formatProjectContext(extracted)
+        assertTrue(formatted.contains("Project Files Index (1 files)"))
+        assertTrue(formatted.contains("// File: src/Main.kt"))
+    }
+
+    @Test
+    fun `code snippet exporter writes fileprovider URI and sanitizes extensions while compaction headers match`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val (ktUri, snippetName) = com.example.data.repository.AuraPdfExporter.exportCodeSnippetUri(
+            context = context,
+            code = "fun test() = 42",
+            language = "kotlin",
+            suggestedFilename = "Helper"
+        )
+        assertEquals("Helper.kt", snippetName)
+        assertTrue(ktUri.toString().startsWith("content://"))
+        assertTrue(ktUri.toString().contains(".fileprovider"))
+        val exportedFile = java.io.File(java.io.File(context.cacheDir, "exports"), snippetName)
+        assertTrue(exportedFile.exists())
+        assertEquals("fun test() = 42", exportedFile.readText())
+        exportedFile.delete()
+
+        assertEquals(
+            "app_script.py",
+            com.example.data.repository.AuraPdfExporter.buildSafeCodeFilename("python", "../dir/app_script")
+        )
+        assertEquals(
+            "aura_snippet_main.js",
+            com.example.data.repository.AuraPdfExporter.buildSafeCodeFilename("javascript", "aura_snippet_main")
+        )
+    }
+
+    @Test
+    fun `rolling context compaction preserves pinned specs and summarizes older turns`() {
+        val history = (1..18).map { i ->
+            MessageEntity(
+                id = "msg_$i",
+                conversationId = "c_long",
+                role = if (i % 2 == 1) "user" else "assistant",
+                content = if (i == 1) "PINNED_TECH_SPEC: Use Room + Compose M3" else "Turn number $i details",
+                isPinned = (i == 1),
+                timestamp = i * 1000L
+            )
+        }
+        val digest = com.example.data.repository.DirectGeminiAiRepository.compactConversationContext(
+            history = history,
+            recentKeepCount = 12
+        )
+        assertTrue(digest.contains("[Pinned Thread Rules & Specs]"))
+        assertTrue(digest.contains("PINNED_TECH_SPEC: Use Room + Compose M3"))
+        assertTrue(digest.contains("[Earlier Conversation Context Digest"))
+        assertTrue(digest.contains("Turn number 2 details"))
+        assertFalse(digest.contains("Turn number 18 details"))
+    }
+
+    @Test
+    fun `message pinning, variant switching, rewind deletion, and JS artifact previewability work cleanly`() = runTest {
+        val convo = repository.createConversation("Variants & Pin", "gemini-3.8-flash", "persona_engineer")
+        val u1 = MessageEntity("u1", convo.id, "user", "Prompt 1", timestamp = 1000L)
+        val variants = listOf(
+            com.example.data.local.MessageVariant("First answer", null, 0L, null, 1500L),
+            com.example.data.local.MessageVariant("Second improved answer", "Deep check", 850L, null, 2500L)
+        )
+        val a1 = MessageEntity(
+            id = "a1",
+            conversationId = convo.id,
+            role = "assistant",
+            content = "Second improved answer",
+            thinkingContent = "Deep check",
+            thinkingDurationMs = 850L,
+            variantsJson = com.example.data.local.serializeMessageVariants(variants),
+            selectedVariantIndex = 1,
+            timestamp = 2000L
+        )
+        val u2 = MessageEntity("u2", convo.id, "user", "Follow up", timestamp = 3000L)
+        repository.saveMessage(u1)
+        repository.saveMessage(a1)
+        repository.saveMessage(u2)
+
+        repository.togglePinMessage("u1", currentPinned = false)
+        assertTrue(repository.getMessagesOnce(convo.id).first { it.id == "u1" }.isPinned)
+
+        repository.selectAssistantVariant(a1, targetIndex = 0)
+        val switched = repository.getMessagesOnce(convo.id).first { it.id == "a1" }
+        assertEquals("First answer", switched.content)
+        assertEquals(0, switched.selectedVariantIndex)
+
+        repository.deleteMessagesFromTimestamp(convo.id, fromTimestamp = 2000L)
+        val remaining = repository.getMessagesOnce(convo.id)
+        assertEquals(1, remaining.size)
+        assertEquals("u1", remaining.first().id)
+
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("javascript"))
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("jsx"))
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("tailwind"))
+        assertFalse(com.example.ui.screens.isPreviewableArtifactLanguage("kotlin"))
+    }
 }

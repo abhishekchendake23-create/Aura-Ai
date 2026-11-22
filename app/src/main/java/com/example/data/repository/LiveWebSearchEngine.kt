@@ -51,7 +51,8 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
         explicitUrls: List<String> = emptyList(),
         maxResults: Int = 7,
         exaApiKey: String = "",
-        preferLiveCrawl: Boolean = true
+        preferLiveCrawl: Boolean = true,
+        exaApiKeys: List<String> = emptyList()
     ): LiveWebContext = withContext(Dispatchers.IO) {
         val normalizedQueries = queries
             .map { extractCleanSearchQuery(it) }
@@ -61,11 +62,16 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
 
         val primaryQuery = normalizedQueries.firstOrNull().orEmpty()
         val allResults = linkedMapOf<String, WebSearchResult>()
-        val cleanExaKey = exaApiKey.trim()
+        val keyPool = (listOf(exaApiKey) + exaApiKeys)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
         val exaUrlContents = linkedMapOf<String, String>()
 
-        // 1. Primary Engine: Exa Neural + Live Web Search API when EXA_API_KEY is configured
-        if (cleanExaKey.isNotBlank() && (normalizedQueries.isNotEmpty() || explicitUrls.isNotEmpty())) {
+        // 1. Primary Engine: Exa Neural + Live Web Search API with multi-key rotation
+        for (cleanExaKey in keyPool) {
+            if (normalizedQueries.isEmpty() && explicitUrls.isEmpty()) break
+            var hadAnySuccess = false
             withTimeoutOrNull(11_000L) {
                 coroutineScope {
                     val exaSearchTasks = normalizedQueries.map { q ->
@@ -77,40 +83,50 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
                                     maxResults = maxResults,
                                     preferLiveCrawl = preferLiveCrawl
                                 )
-                            }.getOrDefault(emptyList())
+                            }.getOrNull()
                         }
                     }
-                    val exaContentsTask: kotlinx.coroutines.Deferred<List<WebSearchResult>>? =
+                    val exaContentsTask: kotlinx.coroutines.Deferred<List<WebSearchResult>?>? =
                         if (explicitUrls.isNotEmpty()) {
                             async {
                                 runCatching {
                                     fetchExaContentsApi(apiKey = cleanExaKey, urls = explicitUrls)
-                                }.getOrDefault(emptyList())
+                                }.getOrNull()
                             }
                         } else {
                             null
                         }
 
                     exaSearchTasks.forEach { task ->
-                        task.await().forEach { item ->
-                            val key = normalizeUrlKey(item.url)
-                            val existing = allResults[key]
-                            if (existing == null || item.snippet.length > existing.snippet.length) {
-                                allResults[key] = item
+                        val items = task.await()
+                        if (items != null) {
+                            hadAnySuccess = true
+                            items.forEach { item ->
+                                val key = normalizeUrlKey(item.url)
+                                val existing = allResults[key]
+                                if (existing == null || item.snippet.length > existing.snippet.length) {
+                                    allResults[key] = item
+                                }
                             }
                         }
                     }
 
-                    exaContentsTask?.await()?.forEach { item ->
-                        if (item.snippet.isNotBlank()) {
-                            exaUrlContents[item.url] = item.snippet.take(1800)
-                        }
-                        val key = normalizeUrlKey(item.url)
-                        if (!allResults.containsKey(key)) {
-                            allResults[key] = item
+                    exaContentsTask?.await()?.let { items ->
+                        hadAnySuccess = true
+                        items.forEach { item ->
+                            if (item.snippet.isNotBlank()) {
+                                exaUrlContents[item.url] = item.snippet.take(1800)
+                            }
+                            val key = normalizeUrlKey(item.url)
+                            if (!allResults.containsKey(key)) {
+                                allResults[key] = item
+                            }
                         }
                     }
                 }
+            }
+            if (hadAnySuccess && (allResults.isNotEmpty() || exaUrlContents.isNotEmpty())) {
+                break
             }
         }
 

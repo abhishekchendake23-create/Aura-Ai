@@ -43,8 +43,60 @@ data class MessageEntity(
     val sourcesJson: String? = null,
     val isBookmarked: Boolean = false,
     val isError: Boolean = false,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isPinned: Boolean = false,
+    val variantsJson: String? = null,
+    val selectedVariantIndex: Int = 0
 )
+
+data class MessageVariant(
+    val content: String,
+    val thinkingContent: String? = null,
+    val thinkingDurationMs: Long = 0L,
+    val sourcesJson: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+fun serializeMessageVariants(variants: List<MessageVariant>): String? {
+    if (variants.isEmpty()) return null
+    val array = org.json.JSONArray()
+    variants.forEach { v ->
+        val obj = org.json.JSONObject()
+        obj.put("content", v.content)
+        v.thinkingContent?.let { obj.put("thinkingContent", it) }
+        obj.put("thinkingDurationMs", v.thinkingDurationMs)
+        v.sourcesJson?.let { obj.put("sourcesJson", it) }
+        obj.put("createdAt", v.createdAt)
+        array.put(obj)
+    }
+    return array.toString()
+}
+
+fun parseMessageVariants(rawJson: String?): List<MessageVariant> {
+    if (rawJson.isNullOrBlank()) return emptyList()
+    return runCatching {
+        val array = org.json.JSONArray(rawJson)
+        buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val content = obj.optString("content")
+                if (content.isNotBlank()) {
+                    add(
+                        MessageVariant(
+                            content = content,
+                            thinkingContent = obj.optString("thinkingContent")
+                                .takeIf { it.isNotBlank() && obj.has("thinkingContent") && !obj.isNull("thinkingContent") },
+                            thinkingDurationMs = obj.optLong("thinkingDurationMs", 0L),
+                            sourcesJson = obj.optString("sourcesJson")
+                                .takeIf { it.isNotBlank() && obj.has("sourcesJson") && !obj.isNull("sourcesJson") },
+                            createdAt = obj.optLong("createdAt", 0L)
+                        )
+                    )
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+}
 
 @Entity(tableName = "personas")
 data class PersonaEntity(

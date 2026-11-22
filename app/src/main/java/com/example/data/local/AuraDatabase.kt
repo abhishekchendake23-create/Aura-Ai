@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         KnowledgeDocEntity::class,
         KnowledgeChunkEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AuraDatabase : RoomDatabase() {
@@ -75,6 +75,14 @@ abstract class AuraDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN variantsJson TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN selectedVariantIndex INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AuraDatabase? = null
 
@@ -85,7 +93,7 @@ abstract class AuraDatabase : RoomDatabase() {
                     AuraDatabase::class.java,
                     "aura_workspace.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

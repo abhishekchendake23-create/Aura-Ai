@@ -119,7 +119,8 @@ data class AiRequest(
     val activeMemories: List<String> = emptyList(),
     val vaultContextSnippets: List<KnowledgeChunkEntity> = emptyList(),
     val useWebSearch: Boolean = false,
-    val useCodeExecution: Boolean = false
+    val useCodeExecution: Boolean = false,
+    val enableSelfVerify: Boolean = false
 )
 
 data class AutoRouteDecision(
@@ -190,43 +191,47 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         if (trimmed.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Enter a prompt to enhance."))
         }
-        val geminiKey = prefs.getEffectiveApiKey()
-        val groqKey = prefs.getEffectiveGroqApiKey()
-        val openRouterKey = prefs.getEffectiveOpenRouterApiKey()
-        val deepSeekKey = prefs.getEffectiveDeepSeekApiKey()
+        val geminiKeys = prefs.getEffectiveApiKeyPool()
+        val groqKeys = prefs.getEffectiveGroqKeyPool()
+        val openRouterKeys = prefs.getEffectiveOpenRouterKeyPool()
+        val deepSeekKeys = prefs.getEffectiveDeepSeekKeyPool()
         val preferFastGroq = prefs.preferFastGroq.first()
 
-        if (geminiKey.isBlank() && groqKey.isBlank() && openRouterKey.isBlank() && deepSeekKey.isBlank()) {
+        if (geminiKeys.isEmpty() && groqKeys.isEmpty() && openRouterKeys.isEmpty() && deepSeekKeys.isEmpty()) {
             return@withContext Result.failure(Exception(sanitizeAuraError("MISSING_API_KEY", isImage = false)))
         }
 
         val systemPrompt = "You are a frontier prompt engineer for Aura AI (Abhynex). Rewrite the user's rough prompt into a crystal-clear, high-leverage, structured prompt specifying objective, constraints, edge cases, and desired output format. Keep it concise (max 4-6 lines), preserve the user's original intent and language style, and return ONLY the rewritten prompt text with no quotes or preamble."
 
         var lastErr: Throwable? = null
-        val groqFirst = groqKey.isNotBlank() && (preferFastGroq || geminiKey.isBlank())
+        val groqFirst = groqKeys.isNotEmpty() && (preferFastGroq || geminiKeys.isEmpty())
 
         if (groqFirst) {
-            val groqResult = enhancePromptViaGroq(groqKey, systemPrompt, trimmed)
-            groqResult.onSuccess { return@withContext Result.success(it) }
-            lastErr = groqResult.exceptionOrNull()
+            for (gKey in groqKeys) {
+                val groqResult = enhancePromptViaGroq(gKey, systemPrompt, trimmed)
+                groqResult.onSuccess { return@withContext Result.success(it) }
+                lastErr = groqResult.exceptionOrNull()
+            }
         }
 
-        if (geminiKey.isNotBlank()) {
-            val geminiResult = enhancePromptViaGemini(geminiKey, systemPrompt, trimmed)
+        for (gemKey in geminiKeys) {
+            val geminiResult = enhancePromptViaGemini(gemKey, systemPrompt, trimmed)
             geminiResult.onSuccess { return@withContext Result.success(it) }
             lastErr = geminiResult.exceptionOrNull()
         }
 
-        if (!groqFirst && groqKey.isNotBlank()) {
-            val groqResult = enhancePromptViaGroq(groqKey, systemPrompt, trimmed)
-            groqResult.onSuccess { return@withContext Result.success(it) }
-            lastErr = groqResult.exceptionOrNull()
+        if (!groqFirst) {
+            for (gKey in groqKeys) {
+                val groqResult = enhancePromptViaGroq(gKey, systemPrompt, trimmed)
+                groqResult.onSuccess { return@withContext Result.success(it) }
+                lastErr = groqResult.exceptionOrNull()
+            }
         }
 
-        if (openRouterKey.isNotBlank()) {
+        for (orKey in openRouterKeys) {
             val orResult = enhancePromptViaOpenAiCompat(
                 url = OPENROUTER_API_URL,
-                apiKey = openRouterKey,
+                apiKey = orKey,
                 modelIds = listOf("deepseek/deepseek-chat-v3-0324:free", "openrouter/free"),
                 systemPrompt = systemPrompt,
                 trimmedPrompt = trimmed,
@@ -239,10 +244,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             lastErr = orResult.exceptionOrNull()
         }
 
-        if (deepSeekKey.isNotBlank()) {
+        for (dsKey in deepSeekKeys) {
             val dsResult = enhancePromptViaOpenAiCompat(
                 url = DEEPSEEK_API_URL,
-                apiKey = deepSeekKey,
+                apiKey = dsKey,
                 modelIds = listOf("deepseek-chat"),
                 systemPrompt = systemPrompt,
                 trimmedPrompt = trimmed
@@ -403,14 +408,17 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         originalRequest: AiRequest,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ) {
-        val geminiKey = prefs.getEffectiveApiKey()
-        val groqKey = prefs.getEffectiveGroqApiKey()
-        val openRouterKey = prefs.getEffectiveOpenRouterApiKey()
-        val deepSeekKey = prefs.getEffectiveDeepSeekApiKey()
-        val exaKey = prefs.getEffectiveExaApiKey()
+        val geminiKeys = prefs.getEffectiveApiKeyPool()
+        val groqKeys = prefs.getEffectiveGroqKeyPool()
+        val openRouterKeys = prefs.getEffectiveOpenRouterKeyPool()
+        val deepSeekKeys = prefs.getEffectiveDeepSeekKeyPool()
+        val exaKeys = prefs.getEffectiveExaKeyPool()
         val preferFastGroq = prefs.preferFastGroq.first()
 
-        if (geminiKey.isBlank() && groqKey.isBlank() && openRouterKey.isBlank() && deepSeekKey.isBlank()) {
+        val geminiKey = geminiKeys.firstOrNull().orEmpty()
+        val groqKey = groqKeys.firstOrNull().orEmpty()
+
+        if (geminiKeys.isEmpty() && groqKeys.isEmpty() && openRouterKeys.isEmpty() && deepSeekKeys.isEmpty()) {
             emitEvent(AiStreamEvent.Failed(sanitizeAuraError("MISSING_API_KEY", isImage = false)))
             return
         }
@@ -440,11 +448,11 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         if (request.capabilityMode == CapabilityMode.DEEP_RESEARCH) {
             streamDeepResearch(
                 request = request,
-                geminiKey = geminiKey,
-                groqKey = groqKey,
-                openRouterKey = openRouterKey,
-                deepSeekKey = deepSeekKey,
-                exaKey = exaKey,
+                geminiKeys = geminiKeys,
+                groqKeys = groqKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys,
+                exaKeys = exaKeys,
                 preferFastGroq = preferFastGroq,
                 startMs = startMs,
                 emitEvent = emitEvent
@@ -453,7 +461,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         var liveWebContext: LiveWebContext? = null
-        var webSearchThinkingPrefix = ""
+        val thinkingPrefixBuilder = StringBuilder()
         if (request.useWebSearch) {
             emitEvent(
                 AiStreamEvent.ThinkingChunk(
@@ -472,16 +480,49 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     queries = searchQueries,
                     explicitUrls = explicitUrls,
                     maxResults = 7,
-                    exaApiKey = exaKey,
-                    preferLiveCrawl = autoFreshWeb || request.useWebSearch
+                    exaApiKey = exaKeys.firstOrNull().orEmpty(),
+                    preferLiveCrawl = autoFreshWeb || request.useWebSearch,
+                    exaApiKeys = exaKeys
                 )
             }.getOrNull()
 
             if (liveWebContext != null && liveWebContext.results.isNotEmpty()) {
-                webSearchThinkingPrefix = "Live Web Search: checked ${liveWebContext.results.size} current sources (${liveWebContext.executedQueries.joinToString(" · ")})\n"
+                val webLog = "Live Web Search: checked ${liveWebContext.results.size} current sources (${liveWebContext.executedQueries.joinToString(" · ")})\n"
+                thinkingPrefixBuilder.append(webLog)
                 emitEvent(
                     AiStreamEvent.ThinkingChunk(
-                        thinkingText = webSearchThinkingPrefix,
+                        thinkingText = thinkingPrefixBuilder.toString(),
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+            }
+        }
+
+        // Dual-Pass Self-Verify Engine ("Zero-Bug Accuracy Mode")
+        var verifyGuardrailsBlock = ""
+        if (request.enableSelfVerify && !request.modelTier.isImageModel && request.prompt.trim().length >= 12) {
+            thinkingPrefixBuilder.append("Aura Verify · Auditing invariants, edge cases & potential bugs...\n")
+            emitEvent(
+                AiStreamEvent.ThinkingChunk(
+                    thinkingText = thinkingPrefixBuilder.toString(),
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            val auditNotes = runSelfVerifyAuditPass(
+                prompt = request.prompt,
+                capabilityMode = request.capabilityMode,
+                groqKeys = groqKeys,
+                geminiKeys = geminiKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys
+            )
+            if (auditNotes.isNotBlank()) {
+                verifyGuardrailsBlock = "### AURA SELF-VERIFY PRE-FLIGHT CHECKLIST\n" +
+                    "Verify every item below before emitting your final solution:\n$auditNotes\n\n"
+                thinkingPrefixBuilder.append("Aura Verify Checklist Ready:\n$auditNotes\n")
+                emitEvent(
+                    AiStreamEvent.ThinkingChunk(
+                        thinkingText = thinkingPrefixBuilder.toString(),
                         elapsedMs = System.currentTimeMillis() - startMs
                     )
                 )
@@ -502,38 +543,46 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             !request.useWebSearch -> ""
             liveWebContext != null && liveWebContext.formattedPromptBlock.isNotBlank() ->
                 liveWebContext.formattedPromptBlock
-            geminiKey.isBlank() ->
+            geminiKeys.isEmpty() ->
                 "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now (device may be offline or search endpoints blocked). Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
             else -> ""
         }
-        val promptText = buildUserPromptText(request, liveWebContextBlock = livePromptNotice)
+        val combinedPrefixBlock = listOf(livePromptNotice, verifyGuardrailsBlock)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        val promptText = buildUserPromptText(request, liveWebContextBlock = combinedPrefixBlock)
         val liveSources = liveWebContext?.sourceCitations.orEmpty()
 
-        val hasExaResults = exaKey.isNotBlank() && !liveWebContext?.results.isNullOrEmpty()
+        val hasExaResults = exaKeys.isNotEmpty() && !liveWebContext?.results.isNullOrEmpty()
         val requiresGeminiTools = request.useCodeExecution ||
             attachedBitmaps.size > 1 ||
             (request.useWebSearch && !hasExaResults)
 
-        val failure = streamAcrossProvidersChain(
-            requestedTier = originalRequest.modelTier,
-            effectiveRequest = request,
-            geminiKey = geminiKey,
-            openRouterKey = openRouterKey,
-            deepSeekKey = deepSeekKey,
-            groqKey = groqKey,
-            preferFastGroq = preferFastGroq,
-            requiresGeminiTools = requiresGeminiTools,
-            systemText = systemText,
-            promptText = promptText,
-            nonGeminiFallbackPromptNotice = if (request.useWebSearch && livePromptNotice.isBlank()) {
+        val nonGeminiBlock = listOf(
+            if (request.useWebSearch && livePromptNotice.isBlank()) {
                 "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now. Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
             } else {
                 livePromptNotice
             },
+            verifyGuardrailsBlock
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
+
+        val failure = streamAcrossProvidersChain(
+            requestedTier = originalRequest.modelTier,
+            effectiveRequest = request,
+            geminiKeys = geminiKeys,
+            openRouterKeys = openRouterKeys,
+            deepSeekKeys = deepSeekKeys,
+            groqKeys = groqKeys,
+            preferFastGroq = preferFastGroq,
+            requiresGeminiTools = requiresGeminiTools,
+            systemText = systemText,
+            promptText = promptText,
+            nonGeminiFallbackPromptNotice = nonGeminiBlock,
             attachedBitmaps = attachedBitmaps,
             startMs = startMs,
             initialSources = liveSources,
-            initialThinkingPrefix = webSearchThinkingPrefix,
+            initialThinkingPrefix = thinkingPrefixBuilder.toString(),
             emitEvent = emitEvent
         )
 
@@ -546,18 +595,94 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
     }
 
+    private suspend fun runSelfVerifyAuditPass(
+        prompt: String,
+        capabilityMode: CapabilityMode,
+        groqKeys: List<String>,
+        geminiKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>
+    ): String {
+        val auditInstruction = buildString {
+            append("You are Aura Verify, a strict pre-flight technical auditor. ")
+            append("In 4 concise bullet points (max 110 words total), list the critical edge cases, invariants, missing-import/null/concurrency traps, or mathematical boundary checks required to answer this request with zero bugs.\n\n")
+            append("Mode: ${capabilityMode.label}\n")
+            append("Request:\n${prompt.take(2500)}")
+        }
+        return runCatching {
+            for (gKey in groqKeys) {
+                val payload = JSONObject().apply {
+                    put("model", "llama-3.3-70b-versatile")
+                    put("stream", false)
+                    put("temperature", 0.15)
+                    put("max_completion_tokens", 280)
+                    put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", auditInstruction)))
+                }
+                val text = runCatching {
+                    withTimeout(7_500L) {
+                        extractTextFromGroqResponse(
+                            executeUnaryJsonRequest(GROQ_API_URL, payload, mapOf("Authorization" to "Bearer $gKey"))
+                        )
+                    }
+                }.getOrNull()?.trim()
+                if (!text.isNullOrBlank()) return@runCatching text
+            }
+            for (gemKey in geminiKeys) {
+                val payload = JSONObject().put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().put("role", "user")
+                            .put("parts", JSONArray().put(JSONObject().put("text", auditInstruction)))
+                    )
+                )
+                val text = runCatching {
+                    withTimeout(8_500L) {
+                        extractTextFromResponse(
+                            executeUnaryJsonRequest("$GEMINI_API_BASE/gemini-2.5-flash-lite:generateContent?key=$gemKey", payload)
+                        )
+                    }
+                }.getOrNull()?.trim()
+                if (!text.isNullOrBlank()) return@runCatching text
+            }
+            for (orKey in openRouterKeys) {
+                val res = enhancePromptViaOpenAiCompat(
+                    url = OPENROUTER_API_URL,
+                    apiKey = orKey,
+                    modelIds = listOf("deepseek/deepseek-chat-v3-0324:free", "openrouter/free"),
+                    systemPrompt = "Return 4 crisp technical audit bullets.",
+                    trimmedPrompt = auditInstruction,
+                    extraHeaders = mapOf("HTTP-Referer" to "https://abhynex.aura.ai", "X-Title" to "Aura AI")
+                ).getOrNull()?.trim()
+                if (!res.isNullOrBlank()) return@runCatching res
+            }
+            for (dsKey in deepSeekKeys) {
+                val res = enhancePromptViaOpenAiCompat(
+                    url = DEEPSEEK_API_URL,
+                    apiKey = dsKey,
+                    modelIds = listOf("deepseek-chat"),
+                    systemPrompt = "Return 4 crisp technical audit bullets.",
+                    trimmedPrompt = auditInstruction
+                ).getOrNull()?.trim()
+                if (!res.isNullOrBlank()) return@runCatching res
+            }
+            ""
+        }.getOrDefault("")
+    }
+
     private suspend fun streamDeepResearch(
         request: AiRequest,
-        geminiKey: String,
-        groqKey: String,
-        openRouterKey: String,
-        deepSeekKey: String,
-        exaKey: String,
+        geminiKeys: List<String>,
+        groqKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>,
+        exaKeys: List<String>,
         preferFastGroq: Boolean,
         startMs: Long,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ) {
-        val thinkingLog = StringBuilder("Deep Research Agent · Phase 1/3: Designing research plan & sub-queries...\n")
+        val geminiKey = geminiKeys.firstOrNull().orEmpty()
+        val groqKey = groqKeys.firstOrNull().orEmpty()
+        val thinkingLog = StringBuilder("Deep Research Agent · Phase 1/4: Designing research plan & sub-queries...\n")
         emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
 
         val subQueries = planResearchQueries(request.prompt, geminiKey, groqKey)
@@ -565,7 +690,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         subQueries.forEachIndexed { idx, q ->
             thinkingLog.append("  ${idx + 1}. $q\n")
         }
-        thinkingLog.append("\nPhase 2/3: Gathering live verified facts & cross-checking sources...\n")
+        thinkingLog.append("\nPhase 2/4: Gathering live verified facts & cross-checking sources...\n")
         emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
 
         val collectedSources = linkedMapOf<String, SourceCitation>()
@@ -576,8 +701,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 liveWebSearchEngine.gatherLiveContext(
                     queries = listOf(subQ),
                     maxResults = 4,
-                    exaApiKey = exaKey,
-                    preferLiveCrawl = true
+                    exaApiKey = exaKeys.firstOrNull().orEmpty(),
+                    preferLiveCrawl = true,
+                    exaApiKeys = exaKeys
                 )
             }.getOrNull()
 
@@ -588,22 +714,22 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
             var stepFindings = ""
             var geminiStepSources = 0
-            if (geminiKey.isNotBlank()) {
-                runCatching {
-                    val (findings, sources) = runGroundedResearchStep(geminiKey, subQ, liveBlock)
+            for (gKey in geminiKeys) {
+                val ok = runCatching {
+                    val (findings, sources) = runGroundedResearchStep(gKey, subQ, liveBlock)
                     sources.forEach { src -> collectedSources[src.uri] = src }
                     geminiStepSources = sources.size
                     stepFindings = findings
-                }.onFailure { err ->
-                    Log.w(TAG, "Deep research Gemini step failed for '$subQ': ${err.message}")
-                }
+                }.isSuccess
+                if (ok && stepFindings.isNotBlank()) break
             }
 
-            if (stepFindings.isBlank() && groqKey.isNotBlank()) {
-                runCatching {
-                    stepFindings = runGroqResearchStep(groqKey, subQ, liveBlock)
-                }.onFailure { err ->
-                    Log.w(TAG, "Deep research Groq step failed for '$subQ': ${err.message}")
+            if (stepFindings.isBlank()) {
+                for (grKey in groqKeys) {
+                    val ok = runCatching {
+                        stepFindings = runGroqResearchStep(grKey, subQ, liveBlock)
+                    }.isSuccess
+                    if (ok && stepFindings.isNotBlank()) break
                 }
             }
 
@@ -618,7 +744,26 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
         }
 
-        thinkingLog.append("\nPhase 3/3: Synthesizing structured executive report with comparisons & takeaways...")
+        // Phase 3/4 Chained Quantitative & Consistency Verification (Web -> Verify Math -> Report)
+        var verifiedMathMemo = ""
+        val needsQuantitativePass = Regex("(\\d+%?|compare|vs|benchmark|price|market|cost|roi|growth|projection|ratio|statistics|data)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(request.prompt) && researchNotes.isNotBlank()
+        if (needsQuantitativePass) {
+            thinkingLog.append("\nPhase 3/4: Cross-checking numbers, metrics & ratios via Aura Sandbox...\n")
+            emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
+            verifiedMathMemo = runChainedQuantitativeCheck(
+                prompt = request.prompt,
+                researchNotes = researchNotes.toString(),
+                geminiKeys = geminiKeys,
+                groqKeys = groqKeys
+            )
+            if (verifiedMathMemo.isNotBlank()) {
+                thinkingLog.append("  • Quantitative verification completed.\n")
+                emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
+            }
+        }
+
+        thinkingLog.append("\nPhase 4/4: Synthesizing structured executive report with comparison tables & takeaways...")
         emitEvent(AiStreamEvent.ThinkingChunk(thinkingLog.toString(), System.currentTimeMillis() - startMs))
 
         val synthesisPrompt = buildString {
@@ -628,10 +773,14 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             } else {
                 append("Notice: Live research angles returned sparse results; stick strictly to verified facts and clearly flag anything uncertain.\n\n")
             }
+            if (verifiedMathMemo.isNotBlank()) {
+                append("Chained Quantitative Verification Notes:\n$verifiedMathMemo\n\n")
+            }
             append(
                 "Synthesize a comprehensive, publication-grade executive research report answering the original request. " +
                     "Include: (1) Executive Summary, (2) Structured Markdown Comparison Table where relevant, " +
-                    "(3) Deep Technical / Practical Breakdown with risks & trade-offs, and (4) Clear Actionable Recommendations."
+                    "(3) Deep Technical / Practical Breakdown with risks & trade-offs, and (4) Clear Actionable Recommendations. " +
+                    "If visual comparison adds clarity, you may also include a self-contained ```svg chart block."
             )
         }
 
@@ -655,10 +804,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         val err = streamAcrossProvidersChain(
             requestedTier = request.modelTier,
             effectiveRequest = synthesisRequest,
-            geminiKey = geminiKey,
-            openRouterKey = openRouterKey,
-            deepSeekKey = deepSeekKey,
-            groqKey = groqKey,
+            geminiKeys = geminiKeys,
+            openRouterKeys = openRouterKeys,
+            deepSeekKeys = deepSeekKeys,
+            groqKeys = groqKeys,
             preferFastGroq = preferFastGroq,
             requiresGeminiTools = false,
             systemText = systemText,
@@ -678,6 +827,58 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 )
             )
         }
+    }
+
+    private suspend fun runChainedQuantitativeCheck(
+        prompt: String,
+        researchNotes: String,
+        geminiKeys: List<String>,
+        groqKeys: List<String>
+    ): String {
+        val quantPrompt = buildString {
+            append("Verify all numerical claims, percentages, dates, and calculations from the research notes below using Python code execution if numbers need arithmetic verification.\n")
+            append("Return ONLY a concise 3-5 bullet verified numbers & discrepancies memo (max 130 words).\n\n")
+            append("Question: ${prompt.take(500)}\n\n")
+            append("Notes:\n${researchNotes.take(4000)}")
+        }
+        for (gemKey in geminiKeys) {
+            val payload = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().put("role", "user")
+                            .put("parts", JSONArray().put(JSONObject().put("text", quantPrompt)))
+                    )
+                )
+                put("tools", JSONArray().put(JSONObject().put("code_execution", JSONObject())))
+            }
+            val text = runCatching {
+                withTimeout(14_000L) {
+                    extractTextFromResponse(
+                        executeUnaryJsonRequest("$GEMINI_API_BASE/gemini-2.5-flash:generateContent?key=$gemKey", payload)
+                    )
+                }
+            }.getOrNull()?.trim()
+            if (!text.isNullOrBlank()) return text
+        }
+        for (grKey in groqKeys) {
+            val payload = JSONObject().apply {
+                put("model", "openai/gpt-oss-120b")
+                put("stream", false)
+                put("temperature", 0.1)
+                put("max_completion_tokens", 280)
+                put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", quantPrompt)))
+            }
+            val text = runCatching {
+                withTimeout(9_000L) {
+                    extractTextFromGroqResponse(
+                        executeUnaryJsonRequest(GROQ_API_URL, payload, mapOf("Authorization" to "Bearer $grKey"))
+                    )
+                }
+            }.getOrNull()?.trim()
+            if (!text.isNullOrBlank()) return text
+        }
+        return ""
     }
 
     private suspend fun rewriteSearchQueriesForWeb(
@@ -884,10 +1085,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     private suspend fun streamAcrossProvidersChain(
         requestedTier: AiModelTier,
         effectiveRequest: AiRequest,
-        geminiKey: String,
-        openRouterKey: String,
-        deepSeekKey: String,
-        groqKey: String,
+        geminiKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>,
+        groqKeys: List<String>,
         preferFastGroq: Boolean,
         requiresGeminiTools: Boolean,
         systemText: String,
@@ -906,23 +1107,24 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             hasImageAttachment = attachedBitmaps.isNotEmpty(),
             requiresGeminiTools = requiresGeminiTools,
             preferFastGroq = preferFastGroq,
-            hasGeminiKey = geminiKey.isNotBlank(),
-            hasOpenRouterKey = openRouterKey.isNotBlank(),
-            hasDeepSeekKey = deepSeekKey.isNotBlank(),
-            hasGroqKey = groqKey.isNotBlank()
+            hasGeminiKey = geminiKeys.isNotEmpty(),
+            hasOpenRouterKey = openRouterKeys.isNotEmpty(),
+            hasDeepSeekKey = deepSeekKeys.isNotEmpty(),
+            hasGroqKey = groqKeys.isNotEmpty()
         )
         if (candidates.isEmpty()) {
             return IllegalStateException("MISSING_API_KEY")
         }
 
         val missingRequestedProviderReason = when {
-            requestedTier.isDeepSeekTier && openRouterKey.isBlank() && deepSeekKey.isBlank() ->
-                "OpenRouter / DeepSeek key not set"
-            requestedTier.isGeminiTier && geminiKey.isBlank() ->
-                "Gemini key not set"
+            requestedTier.isDeepSeekTier && openRouterKeys.isEmpty() && deepSeekKeys.isEmpty() ->
+                "DeepSeek route not configured"
+            requestedTier.isGeminiTier && geminiKeys.isEmpty() ->
+                "Primary route not configured"
             else -> null
         }
 
+        val failedKeyByProvider = mutableMapOf<ModelProvider, MutableSet<String>>()
         val failedProviderAuth = mutableSetOf<ModelProvider>()
         var lastError: Throwable? = null
         var previousFailedDisplay: String? = if (missingRequestedProviderReason != null) requestedTier.displayName else null
@@ -939,90 +1141,129 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         for ((index, candidate) in candidates.withIndex()) {
             if (candidate.provider in failedProviderAuth) continue
 
-            emitEvent(
-                AiStreamEvent.ModelActivated(
-                    modelId = candidate.modelId,
-                    modelDisplayName = candidate.displayName,
-                    switchedFromModel = previousFailedDisplay,
-                    switchReason = previousFailReason
-                )
-            )
+            val providerPool = when (candidate.provider) {
+                ModelProvider.GEMINI -> geminiKeys
+                ModelProvider.OPENROUTER -> openRouterKeys
+                ModelProvider.DEEPSEEK -> deepSeekKeys
+                ModelProvider.GROQ -> groqKeys
+            }.filter { it !in failedKeyByProvider[candidate.provider].orEmpty() }
 
-            val effectiveThinkingPrefix = initialThinkingPrefix.trim()
-
-            val err = when (candidate.provider) {
-                ModelProvider.GEMINI -> streamSingleGeminiCandidate(
-                    apiKey = geminiKey,
-                    candidate = candidate,
-                    request = effectiveRequest,
-                    systemText = systemText,
-                    promptText = promptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = initialSources,
-                    initialThinkingPrefix = effectiveThinkingPrefix,
-                    emitEvent = emitEvent
-                )
-                ModelProvider.OPENROUTER -> streamSingleOpenAiCompatCandidate(
-                    url = OPENROUTER_API_URL,
-                    apiKey = openRouterKey,
-                    extraHeaders = mapOf(
-                        "HTTP-Referer" to "https://abhynex.aura.ai",
-                        "X-Title" to "Aura AI"
-                    ),
-                    useMaxCompletionTokens = false,
-                    candidate = candidate,
-                    request = effectiveRequest,
-                    systemText = systemText,
-                    promptText = nonGeminiPromptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = initialSources,
-                    initialThinkingPrefix = effectiveThinkingPrefix,
-                    emitEvent = emitEvent
-                )
-                ModelProvider.DEEPSEEK -> streamSingleOpenAiCompatCandidate(
-                    url = DEEPSEEK_API_URL,
-                    apiKey = deepSeekKey,
-                    extraHeaders = emptyMap(),
-                    useMaxCompletionTokens = false,
-                    candidate = candidate,
-                    request = effectiveRequest,
-                    systemText = systemText,
-                    promptText = nonGeminiPromptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = initialSources,
-                    initialThinkingPrefix = effectiveThinkingPrefix,
-                    emitEvent = emitEvent
-                )
-                ModelProvider.GROQ -> streamSingleOpenAiCompatCandidate(
-                    url = GROQ_API_URL,
-                    apiKey = groqKey,
-                    extraHeaders = emptyMap(),
-                    useMaxCompletionTokens = true,
-                    candidate = candidate,
-                    request = effectiveRequest,
-                    systemText = systemText,
-                    promptText = nonGeminiPromptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = initialSources,
-                    initialThinkingPrefix = effectiveThinkingPrefix,
-                    emitEvent = emitEvent
-                )
+            if (providerPool.isEmpty()) {
+                failedProviderAuth += candidate.provider
+                continue
             }
 
-            if (err == null) {
+            val effectiveThinkingPrefix = initialThinkingPrefix.trim()
+            var candidateSucceeded = false
+
+            for ((keyIdx, activeKey) in providerPool.withIndex()) {
+                emitEvent(
+                    AiStreamEvent.ModelActivated(
+                        modelId = candidate.modelId,
+                        modelDisplayName = candidate.displayName,
+                        switchedFromModel = previousFailedDisplay,
+                        switchReason = previousFailReason
+                    )
+                )
+
+                val err = when (candidate.provider) {
+                    ModelProvider.GEMINI -> streamSingleGeminiCandidate(
+                        apiKey = activeKey,
+                        candidate = candidate,
+                        request = effectiveRequest,
+                        systemText = systemText,
+                        promptText = promptText,
+                        attachedBitmaps = attachedBitmaps,
+                        startMs = startMs,
+                        initialSources = initialSources,
+                        initialThinkingPrefix = effectiveThinkingPrefix,
+                        emitEvent = emitEvent
+                    )
+                    ModelProvider.OPENROUTER -> streamSingleOpenAiCompatCandidate(
+                        url = OPENROUTER_API_URL,
+                        apiKey = activeKey,
+                        extraHeaders = mapOf(
+                            "HTTP-Referer" to "https://abhynex.aura.ai",
+                            "X-Title" to "Aura AI"
+                        ),
+                        useMaxCompletionTokens = false,
+                        candidate = candidate,
+                        request = effectiveRequest,
+                        systemText = systemText,
+                        promptText = nonGeminiPromptText,
+                        attachedBitmaps = attachedBitmaps,
+                        startMs = startMs,
+                        initialSources = initialSources,
+                        initialThinkingPrefix = effectiveThinkingPrefix,
+                        emitEvent = emitEvent
+                    )
+                    ModelProvider.DEEPSEEK -> streamSingleOpenAiCompatCandidate(
+                        url = DEEPSEEK_API_URL,
+                        apiKey = activeKey,
+                        extraHeaders = emptyMap(),
+                        useMaxCompletionTokens = false,
+                        candidate = candidate,
+                        request = effectiveRequest,
+                        systemText = systemText,
+                        promptText = nonGeminiPromptText,
+                        attachedBitmaps = attachedBitmaps,
+                        startMs = startMs,
+                        initialSources = initialSources,
+                        initialThinkingPrefix = effectiveThinkingPrefix,
+                        emitEvent = emitEvent
+                    )
+                    ModelProvider.GROQ -> streamSingleOpenAiCompatCandidate(
+                        url = GROQ_API_URL,
+                        apiKey = activeKey,
+                        extraHeaders = emptyMap(),
+                        useMaxCompletionTokens = true,
+                        candidate = candidate,
+                        request = effectiveRequest,
+                        systemText = systemText,
+                        promptText = nonGeminiPromptText,
+                        attachedBitmaps = attachedBitmaps,
+                        startMs = startMs,
+                        initialSources = initialSources,
+                        initialThinkingPrefix = effectiveThinkingPrefix,
+                        emitEvent = emitEvent
+                    )
+                }
+
+                if (err == null) {
+                    candidateSucceeded = true
+                    break
+                }
+
+                lastError = err
+                val isKeySpecificFailure = isProviderAuthOrBillingError(err) || isQuotaOrRateLimitError(err)
+                if (isKeySpecificFailure) {
+                    failedKeyByProvider.getOrPut(candidate.provider) { mutableSetOf() }.add(activeKey)
+                    val hasAnotherKeyInPool = keyIdx < providerPool.lastIndex
+                    if (hasAnotherKeyInPool) {
+                        Log.w(TAG, "Rotating ${candidate.provider} API key after ${summarizeSwitchReason(err)}")
+                        continue
+                    }
+                    if (isProviderAuthOrBillingError(err)) {
+                        failedProviderAuth += candidate.provider
+                    }
+                }
+                break
+            }
+
+            if (candidateSucceeded) {
                 return null
             }
 
-            lastError = err
-            if (isProviderAuthOrBillingError(err)) {
-                failedProviderAuth += candidate.provider
+            val err = lastError ?: IOException("Candidate failed")
+            val hasMoreCandidates = candidates.drop(index + 1).any { nextCandidate ->
+                val remainingKeys = when (nextCandidate.provider) {
+                    ModelProvider.GEMINI -> geminiKeys
+                    ModelProvider.OPENROUTER -> openRouterKeys
+                    ModelProvider.DEEPSEEK -> deepSeekKeys
+                    ModelProvider.GROQ -> groqKeys
+                }.count { it !in failedKeyByProvider[nextCandidate.provider].orEmpty() }
+                nextCandidate.provider !in failedProviderAuth && remainingKeys > 0
             }
-
-            val hasMoreCandidates = candidates.drop(index + 1).any { it.provider !in failedProviderAuth }
             if (hasMoreCandidates && isRecoverableModelError(err)) {
                 previousFailedDisplay = candidate.displayName
                 previousFailReason = summarizeSwitchReason(err)
@@ -1034,6 +1275,15 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         return lastError ?: IOException("All configured AI models failed to respond")
+    }
+
+    private fun isQuotaOrRateLimitError(t: Throwable): Boolean {
+        val msg = (t.message ?: t.localizedMessage ?: "").lowercase()
+        return msg.contains("429") ||
+            msg.contains("quota") ||
+            msg.contains("rate") ||
+            msg.contains("resource_exhausted") ||
+            msg.contains("exceeded")
     }
 
     private suspend fun streamSingleGeminiCandidate(
@@ -2509,6 +2759,51 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 msg.contains("unable to resolve") ||
                 msg.contains("timeout")
         }
+
+        fun compactConversationContext(history: List<MessageEntity>, recentKeepCount: Int = 12): String {
+            val valid = history.filter { !it.isError && it.content.isNotBlank() }
+            if (valid.isEmpty()) return ""
+
+            val recentSet = valid.takeLast(recentKeepCount).map { it.id }.toSet()
+            val pinnedOutsideRecent = valid.filter { it.isPinned && it.id !in recentSet }
+            val olderMessages = if (valid.size > recentKeepCount) valid.dropLast(recentKeepCount) else emptyList()
+
+            val sb = StringBuilder()
+            if (pinnedOutsideRecent.isNotEmpty()) {
+                sb.append("### [Pinned Thread Rules & Specs]\n")
+                pinnedOutsideRecent.forEach { msg ->
+                    val speaker = if (msg.role == "user") "User" else "Aura AI"
+                    sb.append("- [$speaker PINNED]: ${msg.content.replace(Regex("\\s+"), " ").trim().take(360)}\n")
+                }
+                sb.append("\n")
+            }
+
+            if (olderMessages.isNotEmpty()) {
+                sb.append("### [Earlier Conversation Context Digest (${olderMessages.size} prior turns)]\n")
+                val codeFiles = Regex("// File:\\s*([^\\s]+)").findAll(olderMessages.joinToString("\n") { it.content })
+                    .map { it.groupValues[1] }
+                    .distinct()
+                    .take(10)
+                    .toList()
+                if (codeFiles.isNotEmpty()) {
+                    sb.append("- Discussed Files: ${codeFiles.joinToString(", ")}\n")
+                }
+                val perTurnBudget = (1800 / olderMessages.size.coerceAtLeast(1)).coerceIn(85, 220)
+                olderMessages.forEach { msg ->
+                    if (!msg.isPinned) {
+                        val speaker = if (msg.role == "user") "User" else "Aura AI"
+                        val snippet = msg.content.replace(Regex("```[\\s\\S]*?```"), "[code]")
+                            .replace(Regex("\\s+"), " ")
+                            .trim()
+                            .take(perTurnBudget)
+                        if (snippet.isNotBlank()) {
+                            sb.append("- $speaker: $snippet\n")
+                        }
+                    }
+                }
+            }
+            return sb.toString().trim()
+        }
     }
 
     private fun buildGroqMessagesArray(
@@ -2517,9 +2812,16 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         promptText: String,
         attachedBitmaps: List<Bitmap>
     ): JSONArray {
+        val contextDigest = compactConversationContext(history, recentKeepCount = 12)
+        val effectiveSystemText = if (contextDigest.isNotBlank()) {
+            "$systemText\n\n$contextDigest"
+        } else {
+            systemText
+        }
+
         val validMessages = history
             .filter { !it.isError && it.content.isNotBlank() }
-            .takeLast(14)
+            .takeLast(12)
 
         val alternating = mutableListOf<Pair<String, String>>()
         var expectRole = "user"
@@ -2535,7 +2837,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         return JSONArray().apply {
-            put(JSONObject().put("role", "system").put("content", systemText))
+            put(JSONObject().put("role", "system").put("content", effectiveSystemText))
             alternating.forEach { (role, text) ->
                 put(JSONObject().put("role", role).put("content", text))
             }
@@ -2560,9 +2862,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     }
 
     private fun buildHistoryJsonArray(history: List<MessageEntity>): JSONArray {
+        val contextDigest = compactConversationContext(history, recentKeepCount = 12)
         val validMessages = history
             .filter { !it.isError && it.content.isNotBlank() }
-            .takeLast(14)
+            .takeLast(12)
 
         val alternating = mutableListOf<Pair<String, String>>()
         var expectRole = "user"
@@ -2578,6 +2881,20 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         return JSONArray().apply {
+            if (contextDigest.isNotBlank()) {
+                put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", contextDigest)))
+                    }
+                )
+                put(
+                    JSONObject().apply {
+                        put("role", "model")
+                        put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will preserve all pinned specs and earlier thread context.")))
+                    }
+                )
+            }
             alternating.forEach { (role, text) ->
                 put(
                     JSONObject().apply {

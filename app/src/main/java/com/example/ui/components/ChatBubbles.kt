@@ -24,17 +24,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.StopCircle
@@ -68,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.MessageEntity
+import com.example.data.local.parseMessageVariants
 import com.example.data.repository.parseSources
 import com.example.ui.StreamingMessageState
 import com.example.ui.theme.LocalAuraColors
@@ -77,6 +84,8 @@ import java.io.File
 @Composable
 fun UserMessageBubble(
     message: MessageEntity,
+    onEditMessage: (MessageEntity) -> Unit = {},
+    onTogglePin: (MessageEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val auraColors = LocalAuraColors.current
@@ -143,7 +152,8 @@ fun UserMessageBubble(
                 .widthIn(max = 316.dp)
                 .border(
                     width = 1.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant,
+                    color = if (message.isPinned) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outlineVariant,
                     shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
                 )
         ) {
@@ -153,6 +163,46 @@ fun UserMessageBubble(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
             )
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (message.isPinned) {
+                Text(
+                    text = "Pinned Spec",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
+            IconButton(
+                onClick = { onTogglePin(message) },
+                modifier = Modifier
+                    .size(34.dp)
+                    .testTag("pin_user_message_${message.id}")
+            ) {
+                Icon(
+                    imageVector = if (message.isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
+                    contentDescription = if (message.isPinned) "Unpin spec from context" else "Pin spec to context",
+                    tint = if (message.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            IconButton(
+                onClick = { onEditMessage(message) },
+                modifier = Modifier
+                    .size(34.dp)
+                    .testTag("edit_user_message_${message.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Edit,
+                    contentDescription = "Edit and re-ask message",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
         }
     }
 }
@@ -168,6 +218,10 @@ fun AssistantMessageBlock(
     onEditGeneratedImage: (String) -> Unit,
     onFollowUpPrompt: (String) -> Unit = {},
     onSaveToMemory: (String) -> Unit = {},
+    onTogglePin: () -> Unit = {},
+    onSelectVariant: (Int) -> Unit = {},
+    onExportPdf: () -> Unit = {},
+    onAutoFixArtifactError: (errorLog: String, code: String) -> Unit = { _, _ -> },
     onShare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -175,6 +229,7 @@ fun AssistantMessageBlock(
     val clipboard = LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
     val sources = remember(message.sourcesJson) { parseSources(message.sourcesJson) }
+    val variants = remember(message.variantsJson) { parseMessageVariants(message.variantsJson) }
     var copied by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
@@ -190,8 +245,55 @@ fun AssistantMessageBlock(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        val headerTitle = if (!message.generatedImagePath.isNullOrBlank()) "Aura Imagine" else "Aura AI"
-        AssistantHeaderRow(modelName = headerTitle, isStreaming = false)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val headerTitle = if (!message.generatedImagePath.isNullOrBlank()) "Aura Imagine" else "Aura AI"
+            AssistantHeaderRow(modelName = headerTitle, isStreaming = false)
+
+            if (variants.size > 1) {
+                val activeIdx = message.selectedVariantIndex.coerceIn(0, variants.lastIndex)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    IconButton(
+                        onClick = { if (activeIdx > 0) onSelectVariant(activeIdx - 1) },
+                        enabled = activeIdx > 0,
+                        modifier = Modifier.size(26.dp).testTag("prev_variant_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                            contentDescription = "Previous answer version",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Text(
+                        text = "${activeIdx + 1} / ${variants.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                    IconButton(
+                        onClick = { if (activeIdx < variants.lastIndex) onSelectVariant(activeIdx + 1) },
+                        enabled = activeIdx < variants.lastIndex,
+                        modifier = Modifier.size(26.dp).testTag("next_variant_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = "Next answer version",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
 
         if (message.isError) {
             Surface(
@@ -316,7 +418,10 @@ fun AssistantMessageBlock(
         }
 
         if (message.content.isNotBlank()) {
-            MarkdownRenderer(markdown = message.content)
+            MarkdownRenderer(
+                markdown = message.content,
+                onAutoFixArtifactError = onAutoFixArtifactError
+            )
         }
 
         if (sources.isNotEmpty()) {
@@ -462,6 +567,34 @@ fun AssistantMessageBlock(
             }
 
             if (message.content.isNotBlank()) {
+                IconButton(
+                    onClick = onExportPdf,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("pdf_export_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PictureAsPdf,
+                        contentDescription = "Export response as PDF",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onTogglePin,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("pin_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = if (message.isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
+                        contentDescription = if (message.isPinned) "Unpin from thread context" else "Pin to thread context",
+                        tint = if (message.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
                 IconButton(
                     onClick = { onSaveToMemory(message.content) },
                     modifier = Modifier

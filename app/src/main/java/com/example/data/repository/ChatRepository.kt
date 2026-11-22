@@ -63,6 +63,28 @@ class ChatRepository(private val dao: AuraDao) {
     suspend fun toggleBookmark(messageId: String, currentValue: Boolean) =
         dao.setBookmarked(messageId, !currentValue)
 
+    suspend fun togglePinMessage(messageId: String, currentPinned: Boolean) =
+        dao.setMessagePinned(messageId, !currentPinned)
+
+    suspend fun deleteMessagesFromTimestamp(conversationId: String, fromTimestamp: Long) =
+        dao.deleteMessagesFromTimestamp(conversationId, fromTimestamp)
+
+    suspend fun selectAssistantVariant(message: MessageEntity, targetIndex: Int) {
+        val variants = com.example.data.local.parseMessageVariants(message.variantsJson)
+        if (variants.isEmpty()) return
+        val safeIdx = targetIndex.coerceIn(0, variants.lastIndex)
+        val chosen = variants[safeIdx]
+        dao.updateMessageVariantSelection(
+            messageId = message.id,
+            content = chosen.content,
+            thinkingContent = chosen.thinkingContent,
+            thinkingDurationMs = chosen.thinkingDurationMs,
+            sourcesJson = chosen.sourcesJson,
+            variantsJson = message.variantsJson,
+            selectedVariantIndex = safeIdx
+        )
+    }
+
     suspend fun renameConversation(id: String, newTitle: String) {
         if (newTitle.isNotBlank()) {
             dao.renameConversation(id, newTitle.trim())

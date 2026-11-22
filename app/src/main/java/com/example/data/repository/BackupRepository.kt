@@ -92,6 +92,9 @@ class BackupRepository(
                         put("isBookmarked", m.isBookmarked)
                         put("isError", m.isError)
                         put("timestamp", m.timestamp)
+                        put("isPinned", m.isPinned)
+                        m.variantsJson?.let { put("variantsJson", it) }
+                        put("selectedVariantIndex", m.selectedVariantIndex)
                     })
                 }
             })
@@ -207,7 +210,10 @@ class BackupRepository(
                         sourcesJson = obj.optString("sourcesJson").takeIf { it.isNotBlank() && obj.has("sourcesJson") },
                         isBookmarked = obj.optBoolean("isBookmarked", false),
                         isError = obj.optBoolean("isError", false),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                        isPinned = obj.optBoolean("isPinned", false),
+                        variantsJson = obj.optString("variantsJson").takeIf { it.isNotBlank() && obj.has("variantsJson") },
+                        selectedVariantIndex = obj.optInt("selectedVariantIndex", 0)
                     )
                 )
             }

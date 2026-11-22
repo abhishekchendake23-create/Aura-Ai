@@ -37,6 +37,8 @@ class PreferencesManager(private val context: Context) {
         val USER_DEEPSEEK_API_KEY = stringPreferencesKey("user_deepseek_api_key")
         val PREFER_FAST_GROQ = booleanPreferencesKey("prefer_fast_groq")
         val VAULT_RAG_ENABLED = booleanPreferencesKey("vault_rag_enabled")
+        val SELF_VERIFY_ENABLED = booleanPreferencesKey("self_verify_enabled")
+        val LIVE_VOICE_READOUT_ENABLED = booleanPreferencesKey("live_voice_readout_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.auraDataStore.data.map { prefs ->
@@ -104,35 +106,38 @@ class PreferencesManager(private val context: Context) {
         prefs[Keys.PREFER_FAST_GROQ] ?: true
     }
 
-    suspend fun getEffectiveApiKey(): String {
-        val saved = userApiKey.first()
-        if (saved.isNotBlank()) return saved
-        return resolveBuildConfigApiKey()
+    val selfVerifyEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.SELF_VERIFY_ENABLED] ?: false
     }
 
-    suspend fun getEffectiveGroqApiKey(): String {
-        val saved = userGroqApiKey.first()
-        if (saved.isNotBlank()) return saved
-        return resolveBuildConfigGroqApiKey()
+    val liveVoiceReadoutEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.LIVE_VOICE_READOUT_ENABLED] ?: false
     }
 
-    suspend fun getEffectiveExaApiKey(): String {
-        val saved = userExaApiKey.first()
-        if (saved.isNotBlank()) return saved
-        return resolveBuildConfigExaApiKey()
-    }
+    suspend fun getEffectiveApiKeyPool(): List<String> =
+        mergeKeyPool(userApiKey.first(), resolveBuildConfigApiKey())
 
-    suspend fun getEffectiveOpenRouterApiKey(): String {
-        val saved = userOpenRouterApiKey.first()
-        if (saved.isNotBlank()) return saved
-        return resolveBuildConfigOpenRouterApiKey()
-    }
+    suspend fun getEffectiveGroqKeyPool(): List<String> =
+        mergeKeyPool(userGroqApiKey.first(), resolveBuildConfigGroqApiKey())
 
-    suspend fun getEffectiveDeepSeekApiKey(): String {
-        val saved = userDeepSeekApiKey.first()
-        if (saved.isNotBlank()) return saved
-        return resolveBuildConfigDeepSeekApiKey()
-    }
+    suspend fun getEffectiveExaKeyPool(): List<String> =
+        mergeKeyPool(userExaApiKey.first(), resolveBuildConfigExaApiKey())
+
+    suspend fun getEffectiveOpenRouterKeyPool(): List<String> =
+        mergeKeyPool(userOpenRouterApiKey.first(), resolveBuildConfigOpenRouterApiKey())
+
+    suspend fun getEffectiveDeepSeekKeyPool(): List<String> =
+        mergeKeyPool(userDeepSeekApiKey.first(), resolveBuildConfigDeepSeekApiKey())
+
+    suspend fun getEffectiveApiKey(): String = getEffectiveApiKeyPool().firstOrNull().orEmpty()
+
+    suspend fun getEffectiveGroqApiKey(): String = getEffectiveGroqKeyPool().firstOrNull().orEmpty()
+
+    suspend fun getEffectiveExaApiKey(): String = getEffectiveExaKeyPool().firstOrNull().orEmpty()
+
+    suspend fun getEffectiveOpenRouterApiKey(): String = getEffectiveOpenRouterKeyPool().firstOrNull().orEmpty()
+
+    suspend fun getEffectiveDeepSeekApiKey(): String = getEffectiveDeepSeekKeyPool().firstOrNull().orEmpty()
 
     suspend fun setUserApiKey(apiKey: String) {
         val cleaned = apiKey.trim()
@@ -229,7 +234,33 @@ class PreferencesManager(private val context: Context) {
         context.auraDataStore.edit { it[Keys.VAULT_RAG_ENABLED] = enabled }
     }
 
+    suspend fun setSelfVerifyEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.SELF_VERIFY_ENABLED] = enabled }
+    }
+
+    suspend fun setLiveVoiceReadoutEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.LIVE_VOICE_READOUT_ENABLED] = enabled }
+    }
+
     companion object {
+        fun parseApiKeyPool(raw: String): List<String> {
+            return raw.split(Regex("[,;\\s\\n\\r]+"))
+                .map { it.trim() }
+                .filter {
+                    it.isNotBlank() &&
+                        it != "YOUR_GEMINI_API_KEY" &&
+                        it != "YOUR_GROQ_API_KEY" &&
+                        it != "YOUR_EXA_API_KEY" &&
+                        it != "YOUR_OPENROUTER_API_KEY" &&
+                        it != "YOUR_DEEPSEEK_API_KEY" &&
+                        it != "MY_NEW_API_KEY_DEFAULT_VALUE"
+                }
+                .distinct()
+        }
+
+        fun mergeKeyPool(savedRaw: String, builtInRaw: String): List<String> {
+            return (parseApiKeyPool(savedRaw) + parseApiKeyPool(builtInRaw)).distinct()
+        }
         fun resolveBuildConfigApiKey(): String {
             val builtIn = BuildConfig.GEMINI_API_KEY.trim()
             return if (builtIn.isBlank() ||

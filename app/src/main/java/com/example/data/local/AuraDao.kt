@@ -65,6 +65,23 @@ interface AuraDao {
     @Query("UPDATE messages SET isBookmarked = :bookmarked WHERE id = :messageId")
     suspend fun setBookmarked(messageId: String, bookmarked: Boolean)
 
+    @Query("UPDATE messages SET isPinned = :pinned WHERE id = :messageId")
+    suspend fun setMessagePinned(messageId: String, pinned: Boolean)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND timestamp >= :fromTimestamp")
+    suspend fun deleteMessagesFromTimestamp(conversationId: String, fromTimestamp: Long)
+
+    @Query("UPDATE messages SET content = :content, thinkingContent = :thinkingContent, thinkingDurationMs = :thinkingDurationMs, sourcesJson = :sourcesJson, variantsJson = :variantsJson, selectedVariantIndex = :selectedVariantIndex WHERE id = :messageId")
+    suspend fun updateMessageVariantSelection(
+        messageId: String,
+        content: String,
+        thinkingContent: String?,
+        thinkingDurationMs: Long,
+        sourcesJson: String?,
+        variantsJson: String?,
+        selectedVariantIndex: Int
+    )
+
     @Query("SELECT * FROM messages WHERE isBookmarked = 1 ORDER BY timestamp DESC")
     fun observeBookmarkedMessages(): Flow<List<MessageEntity>>
 

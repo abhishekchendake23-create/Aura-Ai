@@ -79,6 +79,13 @@ class MainActivity : ComponentActivity() {
                     incoming.action = null
                 }
             }
+            Intent.ACTION_PROCESS_TEXT -> {
+                val selectedText = incoming.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+                if (!selectedText.isNullOrBlank()) {
+                    chatViewModel.handleProcessText(selectedText)
+                    incoming.action = null
+                }
+            }
         }
     }
 }

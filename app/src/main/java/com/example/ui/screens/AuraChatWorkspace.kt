@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -35,16 +36,20 @@ import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -65,8 +70,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.local.MessageEntity
 import com.example.data.model.AiModelTier
 import com.example.data.model.CapabilityMode
+import com.example.data.repository.AuraPdfExporter
 import com.example.ui.AppDestination
 import com.example.ui.ChatViewModel
 import com.example.ui.components.AssistantMessageBlock
@@ -77,8 +84,10 @@ import com.example.ui.components.GeminiSparkleIcon
 import com.example.ui.components.ModelSelectorSheet
 import com.example.ui.components.StreamingAssistantBlock
 import com.example.ui.components.UserMessageBubble
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 @Composable
@@ -158,6 +167,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val codeExecutionEnabled by viewModel.codeExecutionEnabled.collectAsStateWithLifecycle()
+    val selfVerifyEnabled by viewModel.selfVerifyEnabled.collectAsStateWithLifecycle()
+    val liveVoiceReadoutEnabled by viewModel.liveVoiceReadoutEnabled.collectAsStateWithLifecycle()
     val isEnhancingPrompt by viewModel.isEnhancingPrompt.collectAsStateWithLifecycle()
     val personas by viewModel.personas.collectAsStateWithLifecycle()
     val activePersona by viewModel.activePersona.collectAsStateWithLifecycle()
@@ -193,6 +204,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     var showWhisperSheet by remember { mutableStateOf(false) }
     var isInChatSearchOpen by remember { mutableStateOf(false) }
     var inChatQuery by remember { mutableStateOf("") }
+    var editingUserMessage by remember { mutableStateOf<MessageEntity?>(null) }
 
     LaunchedEffect(openScannerTrigger) {
         if (openScannerTrigger) {
@@ -227,10 +239,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.attachDocument(uri)
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.attachProjectFiles(uris)
         }
     }
 
@@ -455,6 +467,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     webSearchEnabled = webSearchEnabled,
                     codeExecutionEnabled = codeExecutionEnabled,
                     vaultRagActive = vaultRagEnabled && knowledgeDocs.isNotEmpty(),
+                    selfVerifyEnabled = selfVerifyEnabled,
+                    liveVoiceReadoutEnabled = liveVoiceReadoutEnabled,
                     isStreaming = streamingState != null,
                     onTextChange = { viewModel.updateComposerText(it) },
                     onToggleDeepSearch = { viewModel.toggleWebSearch() },
@@ -477,6 +491,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     onClearAttachment = { viewModel.clearAttachment() },
                     onClearImagineMode = { viewModel.selectModel(AiModelTier.GEMINI_3_8_FLASH) },
                     onClearSandboxMode = { viewModel.toggleCodeExecution() },
+                    onClearSelfVerify = { viewModel.toggleSelfVerify() },
+                    onClearLiveVoiceReadout = { viewModel.toggleLiveVoiceReadout() },
                     onSend = { viewModel.sendPrompt() },
                     onStop = { viewModel.stopGeneration() }
                 )
@@ -523,7 +539,11 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     ) {
                         items(visibleMessages, key = { it.id }) { msg ->
                             if (msg.role == "user") {
-                                UserMessageBubble(message = msg)
+                                UserMessageBubble(
+                                    message = msg,
+                                    onEditMessage = { editingUserMessage = it },
+                                    onTogglePin = { viewModel.toggleMessagePinned(it) }
+                                )
                             } else {
                                 AssistantMessageBlock(
                                     message = msg,
@@ -543,6 +563,23 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                             content = text.replace(Regex("\\s+"), " ").trim().take(220),
                                             category = "Saved Insight"
                                         )
+                                    },
+                                    onTogglePin = { viewModel.toggleMessagePinned(msg) },
+                                    onSelectVariant = { idx -> viewModel.switchAssistantVariant(msg, idx) },
+                                    onExportPdf = {
+                                        scope.launch {
+                                            runCatching {
+                                                val uri = withContext(Dispatchers.IO) {
+                                                    AuraPdfExporter.exportMessageToPdf(context, msg)
+                                                }
+                                                sharePdfUri(context, uri, "Export Aura AI PDF")
+                                            }.onFailure { err ->
+                                                viewModel.showToastMessage(err.localizedMessage ?: "PDF export failed")
+                                            }
+                                        }
+                                    },
+                                    onAutoFixArtifactError = { errLog, code ->
+                                        viewModel.autoFixArtifactCode(errLog, code)
                                     },
                                     onShare = {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -585,6 +622,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             selectedModel = selectedModel,
             activePersona = activePersona,
             codeExecutionEnabled = codeExecutionEnabled,
+            selfVerifyEnabled = selfVerifyEnabled,
+            liveVoiceReadoutEnabled = liveVoiceReadoutEnabled,
             hasMessages = messages.isNotEmpty(),
             canEnhancePrompt = composerText.trim().length >= 4 && streamingState == null,
             isEnhancingPrompt = isEnhancingPrompt,
@@ -601,8 +640,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                 }
             },
             onToggleCodeExecution = { viewModel.toggleCodeExecution() },
+            onToggleSelfVerify = { viewModel.toggleSelfVerify() },
+            onToggleLiveVoiceReadout = { viewModel.toggleLiveVoiceReadout() },
             onPickFile = {
-                filePickerLauncher.launch(arrayOf("text/*", "application/json"))
+                filePickerLauncher.launch(arrayOf("*/*"))
             },
             onOpenScanner = { showScannerSheet = true },
             onOpenWhisperAudio = { showWhisperSheet = true },
@@ -648,6 +689,18 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                 context.startActivity(
                     Intent.createChooser(shareIntent, "Export Aura AI Thread (.md)")
                 )
+            },
+            onExportThreadPdf = {
+                scope.launch {
+                    runCatching {
+                        val uri = withContext(Dispatchers.IO) {
+                            AuraPdfExporter.exportThreadToPdf(context, messages)
+                        }
+                        sharePdfUri(context, uri, "Export Aura AI Thread PDF")
+                    }.onFailure { err ->
+                        viewModel.showToastMessage(err.localizedMessage ?: "PDF export failed")
+                    }
+                }
             },
             onOpenSettings = { showSettingsSheet = true },
             onDismiss = { showToolsSheet = false }
@@ -736,6 +789,58 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             onDismiss = { showWhisperSheet = false }
         )
     }
+
+    editingUserMessage?.let { targetMsg ->
+        var editedText by remember(targetMsg.id) { mutableStateOf(targetMsg.content) }
+        AlertDialog(
+            onDismissRequest = { editingUserMessage = null },
+            title = { Text("Edit & Re-Ask Aura AI") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Updating this prompt re-branches the conversation from here with a fresh response.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = editedText,
+                        onValueChange = { editedText = it },
+                        minLines = 3,
+                        maxLines = 8,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_user_message_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = editedText.isNotBlank(),
+                    onClick = {
+                        viewModel.editUserMessageAndRegenerate(targetMsg, editedText)
+                        editingUserMessage = null
+                    },
+                    modifier = Modifier.testTag("confirm_edit_user_message")
+                ) {
+                    Text("Save & Ask")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingUserMessage = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+private fun sharePdfUri(context: android.content.Context, uri: Uri, chooserTitle: String) {
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/pdf"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
 }
 
 @Composable

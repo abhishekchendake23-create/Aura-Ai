@@ -27,11 +27,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
@@ -43,6 +45,7 @@ import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
@@ -86,6 +89,7 @@ import com.example.data.model.CapabilityMode
 import com.example.data.model.SlashCommand
 import com.example.ui.theme.LocalAuraColors
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ComposerBar(
     text: String,
@@ -96,6 +100,8 @@ fun ComposerBar(
     webSearchEnabled: Boolean,
     codeExecutionEnabled: Boolean,
     vaultRagActive: Boolean = false,
+    selfVerifyEnabled: Boolean = false,
+    liveVoiceReadoutEnabled: Boolean = false,
     isStreaming: Boolean,
     onTextChange: (String) -> Unit,
     onToggleDeepSearch: () -> Unit,
@@ -107,6 +113,8 @@ fun ComposerBar(
     onClearAttachment: () -> Unit,
     onClearImagineMode: () -> Unit,
     onClearSandboxMode: () -> Unit,
+    onClearSelfVerify: () -> Unit = {},
+    onClearLiveVoiceReadout: () -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
@@ -225,12 +233,13 @@ fun ComposerBar(
                 AnimatedVisibility(
                     visible = attachment != null || isImageActive || codeExecutionEnabled ||
                         selectedLanguage != AppLanguage.AUTO ||
-                        selectedCapability == CapabilityMode.DEEP_RESEARCH || vaultRagActive
+                        selectedCapability == CapabilityMode.DEEP_RESEARCH || vaultRagActive ||
+                        (selfVerifyEnabled && !isImageActive) || (liveVoiceReadoutEnabled && !isImageActive)
                 ) {
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         attachment?.let { draft ->
                             val totalPages = 1 + draft.extraImageUris.size
@@ -307,6 +316,19 @@ fun ComposerBar(
                                 label = "Vault RAG",
                                 accentColor = auraColors.emerald,
                                 onDismiss = onOpenToolsSheet
+                            )
+                        }
+                        if (!isImageActive && selfVerifyEnabled) {
+                            MiniDismissBadge(
+                                label = "Self-Verify",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onClearSelfVerify
+                            )
+                        }
+                        if (!isImageActive && liveVoiceReadoutEnabled) {
+                            MiniDismissBadge(
+                                label = "Auto-Speak",
+                                onDismiss = onClearLiveVoiceReadout
                             )
                         }
                         if (selectedLanguage != AppLanguage.AUTO) {
@@ -556,6 +578,8 @@ fun AuraToolsSheet(
     selectedModel: AiModelTier,
     activePersona: PersonaEntity?,
     codeExecutionEnabled: Boolean,
+    selfVerifyEnabled: Boolean = false,
+    liveVoiceReadoutEnabled: Boolean = false,
     hasMessages: Boolean,
     canEnhancePrompt: Boolean,
     isEnhancingPrompt: Boolean,
@@ -566,6 +590,8 @@ fun AuraToolsSheet(
     onSelectCapability: (CapabilityMode) -> Unit,
     onToggleImagineMode: () -> Unit,
     onToggleCodeExecution: () -> Unit,
+    onToggleSelfVerify: () -> Unit = {},
+    onToggleLiveVoiceReadout: () -> Unit = {},
     onPickFile: () -> Unit,
     onOpenScanner: () -> Unit = {},
     onOpenWhisperAudio: () -> Unit = {},
@@ -577,6 +603,7 @@ fun AuraToolsSheet(
     onOpenPersonaStudio: () -> Unit,
     onToggleInChatSearch: () -> Unit,
     onExportThread: () -> Unit,
+    onExportThreadPdf: () -> Unit = {},
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -797,8 +824,32 @@ fun AuraToolsSheet(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ToolActionCard(
+                        icon = Icons.Rounded.CheckCircle,
+                        title = if (selfVerifyEnabled) "Self-Verify ON" else "Self-Verify",
+                        highlighted = selfVerifyEnabled,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onToggleSelfVerify()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_self_verify")
+                    )
+                    ToolActionCard(
+                        icon = Icons.AutoMirrored.Rounded.VolumeUp,
+                        title = if (liveVoiceReadoutEnabled) "Auto-Speak ON" else "Auto-Speak",
+                        highlighted = liveVoiceReadoutEnabled,
+                        onClick = {
+                            onToggleLiveVoiceReadout()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_live_voice_readout")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
                         icon = Icons.Rounded.AttachFile,
-                        title = "Attach File",
+                        title = "Files / ZIP",
                         onClick = {
                             onDismiss()
                             onPickFile()
@@ -872,6 +923,15 @@ fun AuraToolsSheet(
                             modifier = Modifier.weight(1f).testTag("export_thread_button")
                         )
                     }
+                    ToolActionCard(
+                        icon = Icons.Rounded.PictureAsPdf,
+                        title = "Export Thread as PDF",
+                        onClick = {
+                            onDismiss()
+                            onExportThreadPdf()
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("export_thread_pdf_button")
+                    )
                 }
 
                 ToolActionCard(

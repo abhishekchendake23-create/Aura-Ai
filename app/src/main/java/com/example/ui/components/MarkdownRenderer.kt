@@ -60,7 +60,12 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import android.content.Intent
+import androidx.compose.material.icons.rounded.IosShare
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.R
+import com.example.data.repository.AuraPdfExporter
 import com.example.ui.screens.ArtifactPreviewDialog
 import com.example.ui.screens.isPreviewableArtifactLanguage
 import com.example.ui.theme.JetBrainsMonoFamily
@@ -83,6 +88,7 @@ private sealed interface MdBlock {
 fun MarkdownRenderer(
     markdown: String,
     isStreaming: Boolean = false,
+    onAutoFixArtifactError: (errorLog: String, code: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
@@ -193,7 +199,8 @@ fun MarkdownRenderer(
                             CodeBlockCard(
                                 language = block.language,
                                 code = block.code,
-                                isLiveStreaming = isTailStreamingBlock
+                                isLiveStreaming = isTailStreamingBlock,
+                                onAutoFixArtifactError = onAutoFixArtifactError
                             )
                         }
                     }
@@ -369,10 +376,12 @@ private fun SandboxOutputCard(output: String) {
 private fun CodeBlockCard(
     language: String,
     code: String,
-    isLiveStreaming: Boolean = false
+    isLiveStreaming: Boolean = false,
+    onAutoFixArtifactError: (errorLog: String, code: String) -> Unit = { _, _ -> }
 ) {
     val auraColors = LocalAuraColors.current
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val errorColor = MaterialTheme.colorScheme.error
     var copied by remember { mutableStateOf(false) }
     var showFullScreen by remember { mutableStateOf(false) }
@@ -458,7 +467,8 @@ private fun CodeBlockCard(
                     text = if (fileBadge != null) "$fileBadge · $cleanLang · $lineCount L" else "$cleanLang · $lineCount lines",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.secondary,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Row(
@@ -489,6 +499,41 @@ private fun CodeBlockCard(
                         )
                     }
                 }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            runCatching {
+                                val (fileUri, fileName) = AuraPdfExporter.exportCodeSnippetUri(
+                                    context = context,
+                                    code = code,
+                                    language = cleanLang,
+                                    suggestedFilename = fileBadge
+                                )
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_STREAM, fileUri)
+                                    putExtra(Intent.EXTRA_SUBJECT, fileName)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "Export $fileName")
+                                )
+                            }
+                        }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .testTag("export_code_file_button"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.IosShare,
+                        contentDescription = "Export code as file",
+                        tint = auraColors.codeText.copy(alpha = 0.78f),
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -568,6 +613,7 @@ private fun CodeBlockCard(
         ArtifactPreviewDialog(
             language = language,
             code = code,
+            onAutoFixError = onAutoFixArtifactError,
             onDismiss = { showArtifactPreview = false }
         )
     }
