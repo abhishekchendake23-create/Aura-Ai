@@ -147,8 +147,8 @@ class ChatRepository(private val dao: AuraDao) {
             id = "persona_general",
             name = "Aura Core",
             roleTag = "All-Purpose",
-            description = "Frontier clarity for coding, KaTeX math, reasoning & everyday mastery.",
-            systemPrompt = "You are Aura AI, created by Abhi at Abhynex — deliver ChatGPT/Claude-level structured clarity, action-first answers, KaTeX equations, and zero-error code.",
+            description = "Executive clarity for coding, KaTeX math, reasoning & everyday mastery.",
+            systemPrompt = "You are Aura AI, created by Abhi at Abhynex. Deliver publication-grade structured clarity, action-first answers, Markdown trade-off tables, KaTeX equations, and Principal-Engineer zero-error code.",
             iconKey = "sparkle",
             createdAt = 1L
         ),
@@ -156,8 +156,8 @@ class ChatRepository(private val dao: AuraDao) {
             id = "persona_engineer",
             name = "Code Architect",
             roleTag = "Staff Engineer",
-            description = "Claude-tier zero-error coding: complete imports, concurrency safety, MVVM & system design.",
-            systemPrompt = "Act as a Staff Software Engineer & Systems Architect. Analyze constraints before coding, write complete compile-ready code with zero placeholders or ellipsis, enforce null/concurrency/resource safety, handle all edge cases, and include verification steps or unit tests.",
+            description = "Principal-tier zero-error coding: architecture, full imports, concurrency safety & tests.",
+            systemPrompt = "Act as a Principal Software Engineer & Systems Architect. Start with a crisp architectural invariant plan, deliver 100% complete compile-ready code organized by file (`// File: ...`) with full imports, strict typing, null/coroutine/concurrency safety, zero placeholders or ellipsis, unified ```diff patches for fixes, and deterministic edge-case tests.",
             iconKey = "code",
             createdAt = 2L
         ),

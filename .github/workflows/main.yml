@@ -32,12 +32,17 @@ jobs:
       - name: Configure Environment (.env)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
         run: |
-          if [ -n "$GEMINI_API_KEY" ]; then
-            printf 'GEMINI_API_KEY=%s\n' "$GEMINI_API_KEY" > .env
-          elif [ ! -f .env ]; then
-            cp .env.example .env
-          fi
+          cp .env.example .env
+          if [ -n "$GEMINI_API_KEY" ]; then printf 'GEMINI_API_KEY=%s\n' "$GEMINI_API_KEY" >> .env; fi
+          if [ -n "$OPENROUTER_API_KEY" ]; then printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" >> .env; fi
+          if [ -n "$DEEPSEEK_API_KEY" ]; then printf 'DEEPSEEK_API_KEY=%s\n' "$DEEPSEEK_API_KEY" >> .env; fi
+          if [ -n "$GROQ_API_KEY" ]; then printf 'GROQ_API_KEY=%s\n' "$GROQ_API_KEY" >> .env; fi
+          if [ -n "$EXA_API_KEY" ]; then printf 'EXA_API_KEY=%s\n' "$EXA_API_KEY" >> .env; fi
 
       - name: Setup Debug Keystore
         env:
@@ -65,6 +70,22 @@ jobs:
 
       - name: Build Debug APK
         run: gradle --no-daemon assembleDebug
+
+      - name: Sign APK (v1 + v2 Android 9 Compatibility)
+        run: |
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER=$(find "$SDK_DIR/build-tools" -name apksigner | sort -V | tail -n 1)
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          "$APKSIGNER" sign \
+            --ks debug.keystore \
+            --ks-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --key-pass pass:android \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            "$APK_PATH"
+          "$APKSIGNER" verify --min-sdk-version 21 --verbose "$APK_PATH"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

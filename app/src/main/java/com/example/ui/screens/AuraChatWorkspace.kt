@@ -171,6 +171,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val hasEffectiveGroqApiKey by viewModel.hasEffectiveGroqApiKey.collectAsStateWithLifecycle()
     val savedExaApiKey by viewModel.savedExaApiKey.collectAsStateWithLifecycle()
     val hasEffectiveExaApiKey by viewModel.hasEffectiveExaApiKey.collectAsStateWithLifecycle()
+    val savedOpenRouterApiKey by viewModel.savedOpenRouterApiKey.collectAsStateWithLifecycle()
+    val hasEffectiveOpenRouterApiKey by viewModel.hasEffectiveOpenRouterApiKey.collectAsStateWithLifecycle()
+    val savedDeepSeekApiKey by viewModel.savedDeepSeekApiKey.collectAsStateWithLifecycle()
+    val hasEffectiveDeepSeekApiKey by viewModel.hasEffectiveDeepSeekApiKey.collectAsStateWithLifecycle()
     val preferFastGroq by viewModel.preferFastGroq.collectAsStateWithLifecycle()
     val memories by viewModel.memories.collectAsStateWithLifecycle()
     val knowledgeDocs by viewModel.knowledgeDocs.collectAsStateWithLifecycle()
@@ -288,7 +292,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         streamingState?.thinkingText?.length
     ) {
         if (streamingState != null && isNearBottom) {
-            delay(90L)
+            delay(25L)
             val lastItemIndex = messages.size + 1
             listState.scrollToItem(lastItemIndex, scrollOffset = Int.MAX_VALUE / 2)
         }
@@ -354,7 +358,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             topBar = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     AuraTopBar(
-                        modelShortName = selectedModel.shortName,
+                        modelShortName = if (selectedModel.isImageModel) "Aura Imagine" else "Aura AI",
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenModelSelector = { showModelSheet = true },
                         onNewChat = { viewModel.startNewChat() }
@@ -661,11 +665,17 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             preferFastGroq = preferFastGroq,
             savedExaApiKey = savedExaApiKey,
             hasEffectiveExaApiKey = hasEffectiveExaApiKey,
+            savedOpenRouterApiKey = savedOpenRouterApiKey,
+            hasEffectiveOpenRouterApiKey = hasEffectiveOpenRouterApiKey,
+            savedDeepSeekApiKey = savedDeepSeekApiKey,
+            hasEffectiveDeepSeekApiKey = hasEffectiveDeepSeekApiKey,
             onSelectTheme = { viewModel.setThemeMode(it) },
             onSelectLanguage = { viewModel.selectLanguage(it) },
             onSaveApiKey = { viewModel.saveApiKey(it) },
             onSaveGroqApiKey = { viewModel.saveGroqApiKey(it) },
             onSaveExaApiKey = { viewModel.saveExaApiKey(it) },
+            onSaveOpenRouterApiKey = { viewModel.saveOpenRouterApiKey(it) },
+            onSaveDeepSeekApiKey = { viewModel.saveDeepSeekApiKey(it) },
             onSetPreferFastGroq = { viewModel.setPreferFastGroq(it) },
             onExportBackup = {
                 exportBackupLauncher.launch("aura_ai_backup_${System.currentTimeMillis()}.json")

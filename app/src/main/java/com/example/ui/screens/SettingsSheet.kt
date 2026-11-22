@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
@@ -74,11 +75,17 @@ fun SettingsSheet(
     preferFastGroq: Boolean,
     savedExaApiKey: String = "",
     hasEffectiveExaApiKey: Boolean = false,
+    savedOpenRouterApiKey: String = "",
+    hasEffectiveOpenRouterApiKey: Boolean = false,
+    savedDeepSeekApiKey: String = "",
+    hasEffectiveDeepSeekApiKey: Boolean = false,
     onSelectTheme: (ThemeMode) -> Unit,
     onSelectLanguage: (AppLanguage) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onSaveGroqApiKey: (String) -> Unit,
     onSaveExaApiKey: (String) -> Unit = {},
+    onSaveOpenRouterApiKey: (String) -> Unit = {},
+    onSaveDeepSeekApiKey: (String) -> Unit = {},
     onSetPreferFastGroq: (Boolean) -> Unit,
     onExportBackup: () -> Unit = {},
     onImportBackup: () -> Unit = {},
@@ -92,6 +99,10 @@ fun SettingsSheet(
     var revealKey by remember { mutableStateOf(false) }
     var groqKeyInput by remember(savedGroqApiKey) { mutableStateOf(savedGroqApiKey) }
     var revealGroqKey by remember { mutableStateOf(false) }
+    var openRouterKeyInput by remember(savedOpenRouterApiKey) { mutableStateOf(savedOpenRouterApiKey) }
+    var revealOpenRouterKey by remember { mutableStateOf(false) }
+    var deepSeekKeyInput by remember(savedDeepSeekApiKey) { mutableStateOf(savedDeepSeekApiKey) }
+    var revealDeepSeekKey by remember { mutableStateOf(false) }
     var exaKeyInput by remember(savedExaApiKey) { mutableStateOf(savedExaApiKey) }
     var revealExaKey by remember { mutableStateOf(false) }
 
@@ -103,6 +114,16 @@ fun SettingsSheet(
     LaunchedEffect(savedGroqApiKey) {
         if (groqKeyInput.isBlank() && savedGroqApiKey.isNotBlank()) {
             groqKeyInput = savedGroqApiKey
+        }
+    }
+    LaunchedEffect(savedOpenRouterApiKey) {
+        if (openRouterKeyInput.isBlank() && savedOpenRouterApiKey.isNotBlank()) {
+            openRouterKeyInput = savedOpenRouterApiKey
+        }
+    }
+    LaunchedEffect(savedDeepSeekApiKey) {
+        if (deepSeekKeyInput.isBlank() && savedDeepSeekApiKey.isNotBlank()) {
+            deepSeekKeyInput = savedDeepSeekApiKey
         }
     }
     LaunchedEffect(savedExaApiKey) {
@@ -163,7 +184,7 @@ fun SettingsSheet(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "API Key",
+                            text = "Gemini API Key (Free Tier)",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -192,7 +213,7 @@ fun SettingsSheet(
                 }
 
                 Text(
-                    text = "Paste your API key below and tap Save. It is stored locally on your phone.",
+                    text = "Unlocks all free Gemini 2.5, 2.0 & Gemma 3 models with automatic failover.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -452,6 +473,233 @@ fun SettingsSheet(
                         onCheckedChange = onSetPreferFastGroq,
                         modifier = Modifier.testTag("prefer_fast_groq_switch")
                     )
+                }
+            }
+
+            // Free DeepSeek Models (OpenRouter :free + optional DeepSeek Direct)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(
+                        width = 1.dp,
+                        color = if (hasEffectiveOpenRouterApiKey || hasEffectiveDeepSeekApiKey) {
+                            auraColors.emerald.copy(alpha = 0.45f)
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        },
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val hasAnyDeepSeekRoute = hasEffectiveOpenRouterApiKey || hasEffectiveDeepSeekApiKey
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Psychology,
+                            contentDescription = null,
+                            tint = if (hasAnyDeepSeekRoute) auraColors.emerald
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "DeepSeek Free Models Key",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (hasAnyDeepSeekRoute) auraColors.emeraldContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                savedOpenRouterApiKey.isNotBlank() || savedDeepSeekApiKey.isNotBlank() -> "DeepSeek Ready"
+                                hasAnyDeepSeekRoute -> "Built-in Ready"
+                                else -> "Optional"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (hasAnyDeepSeekRoute) auraColors.emerald
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Paste a free OpenRouter key (sk-or-...) for DeepSeek R1 0528 (:free), V3 0324 (:free) & Chimera, or an optional direct DeepSeek key (sk-...). If unset, Aura automatically fails over to Gemini/Groq.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = openRouterKeyInput,
+                    onValueChange = { openRouterKeyInput = it },
+                    singleLine = true,
+                    placeholder = { Text("Paste sk-or-... OpenRouter key") },
+                    visualTransformation = if (revealOpenRouterKey) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row {
+                            if (openRouterKeyInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { openRouterKeyInput = "" },
+                                    modifier = Modifier.testTag("clear_openrouter_api_key_input")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear OpenRouter input",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { revealOpenRouterKey = !revealOpenRouterKey },
+                                modifier = Modifier.testTag("toggle_reveal_openrouter_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = if (revealOpenRouterKey) Icons.Rounded.VisibilityOff
+                                    else Icons.Rounded.Visibility,
+                                    contentDescription = if (revealOpenRouterKey) "Hide OpenRouter key" else "Show OpenRouter key",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("openrouter_api_key_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSaveOpenRouterApiKey(openRouterKeyInput)
+                            onDismiss()
+                        },
+                        enabled = openRouterKeyInput.isNotBlank() && openRouterKeyInput.trim() != savedOpenRouterApiKey,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_openrouter_api_key_button")
+                    ) {
+                        Text(
+                            if (savedOpenRouterApiKey.isNotBlank() && openRouterKeyInput.trim() == savedOpenRouterApiKey) "Saved"
+                            else "Save OpenRouter Key"
+                        )
+                    }
+
+                    if (savedOpenRouterApiKey.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                openRouterKeyInput = ""
+                                onSaveOpenRouterApiKey("")
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.testTag("remove_saved_openrouter_api_key_button")
+                        ) {
+                            Text("Remove")
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = deepSeekKeyInput,
+                    onValueChange = { deepSeekKeyInput = it },
+                    singleLine = true,
+                    placeholder = { Text("Optional direct DeepSeek key (sk-...)") },
+                    visualTransformation = if (revealDeepSeekKey) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row {
+                            if (deepSeekKeyInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { deepSeekKeyInput = "" },
+                                    modifier = Modifier.testTag("clear_deepseek_api_key_input")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear DeepSeek input",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { revealDeepSeekKey = !revealDeepSeekKey },
+                                modifier = Modifier.testTag("toggle_reveal_deepseek_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = if (revealDeepSeekKey) Icons.Rounded.VisibilityOff
+                                    else Icons.Rounded.Visibility,
+                                    contentDescription = if (revealDeepSeekKey) "Hide DeepSeek key" else "Show DeepSeek key",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("deepseek_api_key_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSaveDeepSeekApiKey(deepSeekKeyInput)
+                            onDismiss()
+                        },
+                        enabled = deepSeekKeyInput.isNotBlank() && deepSeekKeyInput.trim() != savedDeepSeekApiKey,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_deepseek_api_key_button")
+                    ) {
+                        Text(
+                            if (savedDeepSeekApiKey.isNotBlank() && deepSeekKeyInput.trim() == savedDeepSeekApiKey) "Saved"
+                            else "Save DeepSeek Key"
+                        )
+                    }
+
+                    if (savedDeepSeekApiKey.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                deepSeekKeyInput = ""
+                                onSaveDeepSeekApiKey("")
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.testTag("remove_saved_deepseek_api_key_button")
+                        ) {
+                            Text("Remove")
+                        }
+                    }
                 }
             }
 

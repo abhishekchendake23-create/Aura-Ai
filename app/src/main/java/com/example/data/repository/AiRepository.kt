@@ -46,10 +46,29 @@ import kotlin.coroutines.resumeWithException
 
 private const val TAG = "AuraAiRepository"
 private const val INFERENCE_TIMEOUT_MS = 240_000L
-private const val STREAM_EMIT_THROTTLE_MS = 45L
+private const val STREAM_EMIT_THROTTLE_MS = 24L
 private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 private const val GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+private const val OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+private const val DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+enum class ModelProvider(val displayName: String) {
+    GEMINI("Gemini"),
+    OPENROUTER("OpenRouter"),
+    DEEPSEEK("DeepSeek"),
+    GROQ("Groq")
+}
+
+data class ModelCandidate(
+    val provider: ModelProvider,
+    val modelId: String,
+    val displayName: String,
+    val supportsThinkingConfig: Boolean = false,
+    val supportsSystemInstruction: Boolean = true,
+    val supportsTools: Boolean = false,
+    val supportsVision: Boolean = true
+)
 
 data class SourceCitation(
     val title: String,
@@ -111,6 +130,13 @@ data class AutoRouteDecision(
 )
 
 sealed interface AiStreamEvent {
+    data class ModelActivated(
+        val modelId: String,
+        val modelDisplayName: String,
+        val switchedFromModel: String? = null,
+        val switchReason: String? = null
+    ) : AiStreamEvent
+
     data class ThinkingChunk(
         val thinkingText: String,
         val elapsedMs: Long
@@ -125,7 +151,8 @@ sealed interface AiStreamEvent {
         val thinkingText: String?,
         val thinkingDurationMs: Long,
         val generatedImagePath: String? = null,
-        val sources: List<SourceCitation> = emptyList()
+        val sources: List<SourceCitation> = emptyList(),
+        val modelDisplayName: String = "Aura AI"
     ) : AiStreamEvent
 
     data class Failed(
@@ -165,9 +192,11 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
         val geminiKey = prefs.getEffectiveApiKey()
         val groqKey = prefs.getEffectiveGroqApiKey()
+        val openRouterKey = prefs.getEffectiveOpenRouterApiKey()
+        val deepSeekKey = prefs.getEffectiveDeepSeekApiKey()
         val preferFastGroq = prefs.preferFastGroq.first()
 
-        if (geminiKey.isBlank() && groqKey.isBlank()) {
+        if (geminiKey.isBlank() && groqKey.isBlank() && openRouterKey.isBlank() && deepSeekKey.isBlank()) {
             return@withContext Result.failure(Exception(sanitizeAuraError("MISSING_API_KEY", isImage = false)))
         }
 
@@ -194,7 +223,77 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             lastErr = groqResult.exceptionOrNull()
         }
 
+        if (openRouterKey.isNotBlank()) {
+            val orResult = enhancePromptViaOpenAiCompat(
+                url = OPENROUTER_API_URL,
+                apiKey = openRouterKey,
+                modelIds = listOf("deepseek/deepseek-chat-v3-0324:free", "openrouter/free"),
+                systemPrompt = systemPrompt,
+                trimmedPrompt = trimmed,
+                extraHeaders = mapOf(
+                    "HTTP-Referer" to "https://abhynex.aura.ai",
+                    "X-Title" to "Aura AI"
+                )
+            )
+            orResult.onSuccess { return@withContext Result.success(it) }
+            lastErr = orResult.exceptionOrNull()
+        }
+
+        if (deepSeekKey.isNotBlank()) {
+            val dsResult = enhancePromptViaOpenAiCompat(
+                url = DEEPSEEK_API_URL,
+                apiKey = deepSeekKey,
+                modelIds = listOf("deepseek-chat"),
+                systemPrompt = systemPrompt,
+                trimmedPrompt = trimmed
+            )
+            dsResult.onSuccess { return@withContext Result.success(it) }
+            lastErr = dsResult.exceptionOrNull()
+        }
+
         Result.failure(Exception(sanitizeAuraError(lastErr?.localizedMessage ?: lastErr?.message, isImage = false)))
+    }
+
+    private suspend fun enhancePromptViaOpenAiCompat(
+        url: String,
+        apiKey: String,
+        modelIds: List<String>,
+        systemPrompt: String,
+        trimmedPrompt: String,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): Result<String> {
+        var lastErr: Throwable? = null
+        val headers = buildMap {
+            put("Authorization", "Bearer $apiKey")
+            putAll(extraHeaders)
+        }
+        for (modelId in modelIds) {
+            try {
+                val payload = JSONObject().apply {
+                    put("model", modelId)
+                    put("stream", false)
+                    put("temperature", 0.5)
+                    put("max_tokens", 1024)
+                    put(
+                        "messages",
+                        JSONArray().apply {
+                            put(JSONObject().put("role", "system").put("content", systemPrompt))
+                            put(JSONObject().put("role", "user").put("content", "Rewrite and sharpen this prompt:\n$trimmedPrompt"))
+                        }
+                    )
+                }
+                val responseJson = withTimeout(14_000L) {
+                    executeUnaryJsonRequest(url = url, bodyJson = payload, headers = headers)
+                }
+                val enhanced = extractTextFromGroqResponse(responseJson).trim()
+                if (enhanced.isNotBlank()) return Result.success(enhanced)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                lastErr = t
+            }
+        }
+        return Result.failure(lastErr ?: IOException("Prompt enhancement failed"))
     }
 
     private suspend fun enhancePromptViaGroq(
@@ -306,10 +405,12 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     ) {
         val geminiKey = prefs.getEffectiveApiKey()
         val groqKey = prefs.getEffectiveGroqApiKey()
+        val openRouterKey = prefs.getEffectiveOpenRouterApiKey()
+        val deepSeekKey = prefs.getEffectiveDeepSeekApiKey()
         val exaKey = prefs.getEffectiveExaApiKey()
         val preferFastGroq = prefs.preferFastGroq.first()
 
-        if (geminiKey.isBlank() && groqKey.isBlank()) {
+        if (geminiKey.isBlank() && groqKey.isBlank() && openRouterKey.isBlank() && deepSeekKey.isBlank()) {
             emitEvent(AiStreamEvent.Failed(sanitizeAuraError("MISSING_API_KEY", isImage = false)))
             return
         }
@@ -341,7 +442,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 request = request,
                 geminiKey = geminiKey,
                 groqKey = groqKey,
+                openRouterKey = openRouterKey,
+                deepSeekKey = deepSeekKey,
                 exaKey = exaKey,
+                preferFastGroq = preferFastGroq,
                 startMs = startMs,
                 emitEvent = emitEvent
             )
@@ -409,99 +513,47 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         val requiresGeminiTools = request.useCodeExecution ||
             attachedBitmaps.size > 1 ||
             (request.useWebSearch && !hasExaResults)
-        val useGroqPrimary = groqKey.isNotBlank() && (
-            geminiKey.isBlank() ||
-                (!requiresGeminiTools && (preferFastGroq || request.modelTier == AiModelTier.GEMINI_3_5_FLASH_LITE))
-            )
 
-        var lastError: Throwable? = null
-
-        if (useGroqPrimary) {
-            val groqFailure = streamViaGroqChain(
-                groqKey = groqKey,
-                request = request,
-                systemText = systemText,
-                promptText = promptText,
-                attachedBitmaps = attachedBitmaps,
-                startMs = startMs,
-                initialSources = liveSources,
-                initialThinkingPrefix = webSearchThinkingPrefix,
-                emitEvent = emitEvent
-            )
-            if (groqFailure == null) return
-            lastError = groqFailure
-
-            if (geminiKey.isNotBlank()) {
-                Log.w(TAG, "Groq fast chain failed (${groqFailure.message}); falling back to primary cloud engine")
-                val geminiFailure = streamViaGeminiChain(
-                    apiKey = geminiKey,
-                    request = request,
-                    systemText = systemText,
-                    promptText = promptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = liveSources,
-                    initialThinkingPrefix = webSearchThinkingPrefix,
-                    emitEvent = emitEvent
-                )
-                if (geminiFailure == null) return
-                lastError = geminiFailure
-            }
-        } else {
-            val geminiFailure = streamViaGeminiChain(
-                apiKey = geminiKey,
-                request = request,
-                systemText = systemText,
-                promptText = promptText,
-                attachedBitmaps = attachedBitmaps,
-                startMs = startMs,
-                initialSources = liveSources,
-                initialThinkingPrefix = webSearchThinkingPrefix,
-                emitEvent = emitEvent
-            )
-            if (geminiFailure == null) return
-            lastError = geminiFailure
-
-            if (groqKey.isNotBlank()) {
-                Log.w(TAG, "Primary cloud chain failed (${geminiFailure.message}); falling back to Groq fast model chain")
-                val groqPromptNotice = if (request.useWebSearch && livePromptNotice.isBlank()) {
-                    "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now. Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
-                } else {
-                    livePromptNotice
-                }
-                val groqPromptText = if (groqPromptNotice != livePromptNotice) {
-                    buildUserPromptText(request, liveWebContextBlock = groqPromptNotice)
-                } else {
-                    promptText
-                }
-                val groqFailure = streamViaGroqChain(
-                    groqKey = groqKey,
-                    request = request,
-                    systemText = systemText,
-                    promptText = groqPromptText,
-                    attachedBitmaps = attachedBitmaps,
-                    startMs = startMs,
-                    initialSources = liveSources,
-                    initialThinkingPrefix = webSearchThinkingPrefix,
-                    emitEvent = emitEvent
-                )
-                if (groqFailure == null) return
-                lastError = groqFailure
-            }
-        }
-
-        emitEvent(
-            AiStreamEvent.Failed(
-                sanitizeAuraError(lastError?.localizedMessage ?: lastError?.message, isImage = false)
-            )
+        val failure = streamAcrossProvidersChain(
+            requestedTier = originalRequest.modelTier,
+            effectiveRequest = request,
+            geminiKey = geminiKey,
+            openRouterKey = openRouterKey,
+            deepSeekKey = deepSeekKey,
+            groqKey = groqKey,
+            preferFastGroq = preferFastGroq,
+            requiresGeminiTools = requiresGeminiTools,
+            systemText = systemText,
+            promptText = promptText,
+            nonGeminiFallbackPromptNotice = if (request.useWebSearch && livePromptNotice.isBlank()) {
+                "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now. Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
+            } else {
+                livePromptNotice
+            },
+            attachedBitmaps = attachedBitmaps,
+            startMs = startMs,
+            initialSources = liveSources,
+            initialThinkingPrefix = webSearchThinkingPrefix,
+            emitEvent = emitEvent
         )
+
+        if (failure != null) {
+            emitEvent(
+                AiStreamEvent.Failed(
+                    sanitizeAuraError(failure.localizedMessage ?: failure.message, isImage = false)
+                )
+            )
+        }
     }
 
     private suspend fun streamDeepResearch(
         request: AiRequest,
         geminiKey: String,
         groqKey: String,
+        openRouterKey: String,
+        deepSeekKey: String,
         exaKey: String,
+        preferFastGroq: Boolean,
         startMs: Long,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ) {
@@ -585,7 +637,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
         val synthesisRequest = request.copy(
             prompt = synthesisPrompt,
-            modelTier = AiModelTier.GEMINI_4_ARGON,
+            modelTier = if (request.modelTier.isDeepSeekTier) request.modelTier else AiModelTier.GEMINI_4_ARGON,
             capabilityMode = CapabilityMode.DEEP_THINK,
             useWebSearch = true
         )
@@ -600,35 +652,25 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         )
         val bitmaps = loadAttachedBitmaps(request)
 
-        var err: Throwable? = null
-        if (geminiKey.isNotBlank()) {
-            err = streamViaGeminiChain(
-                apiKey = geminiKey,
-                request = synthesisRequest,
-                systemText = systemText,
-                promptText = buildUserPromptText(synthesisRequest),
-                attachedBitmaps = bitmaps,
-                startMs = startMs,
-                initialSources = collectedSources,
-                initialThinkingPrefix = thinkingLog.toString(),
-                emitEvent = emitEvent
-            )
-        }
-        if (err != null || geminiKey.isBlank()) {
-            if (groqKey.isNotBlank()) {
-                err = streamViaGroqChain(
-                    groqKey = groqKey,
-                    request = synthesisRequest,
-                    systemText = systemText,
-                    promptText = buildUserPromptText(synthesisRequest),
-                    attachedBitmaps = bitmaps,
-                    startMs = startMs,
-                    initialSources = collectedSources,
-                    initialThinkingPrefix = thinkingLog.toString(),
-                    emitEvent = emitEvent
-                )
-            }
-        }
+        val err = streamAcrossProvidersChain(
+            requestedTier = request.modelTier,
+            effectiveRequest = synthesisRequest,
+            geminiKey = geminiKey,
+            openRouterKey = openRouterKey,
+            deepSeekKey = deepSeekKey,
+            groqKey = groqKey,
+            preferFastGroq = preferFastGroq,
+            requiresGeminiTools = false,
+            systemText = systemText,
+            promptText = buildUserPromptText(synthesisRequest),
+            nonGeminiFallbackPromptNotice = "",
+            attachedBitmaps = bitmaps,
+            startMs = startMs,
+            initialSources = collectedSources,
+            initialThinkingPrefix = thinkingLog.toString(),
+            emitEvent = emitEvent
+        )
+
         if (err != null) {
             emitEvent(
                 AiStreamEvent.Failed(
@@ -839,20 +881,182 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         return extractTextFromGroqResponse(json).trim()
     }
 
-    private suspend fun streamViaGeminiChain(
-        apiKey: String,
-        request: AiRequest,
+    private suspend fun streamAcrossProvidersChain(
+        requestedTier: AiModelTier,
+        effectiveRequest: AiRequest,
+        geminiKey: String,
+        openRouterKey: String,
+        deepSeekKey: String,
+        groqKey: String,
+        preferFastGroq: Boolean,
+        requiresGeminiTools: Boolean,
         systemText: String,
         promptText: String,
+        nonGeminiFallbackPromptNotice: String,
         attachedBitmaps: List<Bitmap>,
         startMs: Long,
         initialSources: Map<String, SourceCitation> = emptyMap(),
         initialThinkingPrefix: String = "",
         emitEvent: suspend (AiStreamEvent) -> Unit
     ): Throwable? {
+        val candidates = buildCrossProviderFallbackChain(
+            requestedTier = requestedTier,
+            effectiveTier = effectiveRequest.modelTier,
+            capabilityMode = effectiveRequest.capabilityMode,
+            hasImageAttachment = attachedBitmaps.isNotEmpty(),
+            requiresGeminiTools = requiresGeminiTools,
+            preferFastGroq = preferFastGroq,
+            hasGeminiKey = geminiKey.isNotBlank(),
+            hasOpenRouterKey = openRouterKey.isNotBlank(),
+            hasDeepSeekKey = deepSeekKey.isNotBlank(),
+            hasGroqKey = groqKey.isNotBlank()
+        )
+        if (candidates.isEmpty()) {
+            return IllegalStateException("MISSING_API_KEY")
+        }
+
+        val missingRequestedProviderReason = when {
+            requestedTier.isDeepSeekTier && openRouterKey.isBlank() && deepSeekKey.isBlank() ->
+                "OpenRouter / DeepSeek key not set"
+            requestedTier.isGeminiTier && geminiKey.isBlank() ->
+                "Gemini key not set"
+            else -> null
+        }
+
+        val failedProviderAuth = mutableSetOf<ModelProvider>()
+        var lastError: Throwable? = null
+        var previousFailedDisplay: String? = if (missingRequestedProviderReason != null) requestedTier.displayName else null
+        var previousFailReason: String? = missingRequestedProviderReason
+
+        val nonGeminiPromptText = if (nonGeminiFallbackPromptNotice.isNotBlank() &&
+            !promptText.contains("### LIVE WEB SEARCH RESULTS")
+        ) {
+            buildUserPromptText(effectiveRequest, liveWebContextBlock = nonGeminiFallbackPromptNotice)
+        } else {
+            promptText
+        }
+
+        for ((index, candidate) in candidates.withIndex()) {
+            if (candidate.provider in failedProviderAuth) continue
+
+            emitEvent(
+                AiStreamEvent.ModelActivated(
+                    modelId = candidate.modelId,
+                    modelDisplayName = candidate.displayName,
+                    switchedFromModel = previousFailedDisplay,
+                    switchReason = previousFailReason
+                )
+            )
+
+            val effectiveThinkingPrefix = initialThinkingPrefix.trim()
+
+            val err = when (candidate.provider) {
+                ModelProvider.GEMINI -> streamSingleGeminiCandidate(
+                    apiKey = geminiKey,
+                    candidate = candidate,
+                    request = effectiveRequest,
+                    systemText = systemText,
+                    promptText = promptText,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = effectiveThinkingPrefix,
+                    emitEvent = emitEvent
+                )
+                ModelProvider.OPENROUTER -> streamSingleOpenAiCompatCandidate(
+                    url = OPENROUTER_API_URL,
+                    apiKey = openRouterKey,
+                    extraHeaders = mapOf(
+                        "HTTP-Referer" to "https://abhynex.aura.ai",
+                        "X-Title" to "Aura AI"
+                    ),
+                    useMaxCompletionTokens = false,
+                    candidate = candidate,
+                    request = effectiveRequest,
+                    systemText = systemText,
+                    promptText = nonGeminiPromptText,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = effectiveThinkingPrefix,
+                    emitEvent = emitEvent
+                )
+                ModelProvider.DEEPSEEK -> streamSingleOpenAiCompatCandidate(
+                    url = DEEPSEEK_API_URL,
+                    apiKey = deepSeekKey,
+                    extraHeaders = emptyMap(),
+                    useMaxCompletionTokens = false,
+                    candidate = candidate,
+                    request = effectiveRequest,
+                    systemText = systemText,
+                    promptText = nonGeminiPromptText,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = effectiveThinkingPrefix,
+                    emitEvent = emitEvent
+                )
+                ModelProvider.GROQ -> streamSingleOpenAiCompatCandidate(
+                    url = GROQ_API_URL,
+                    apiKey = groqKey,
+                    extraHeaders = emptyMap(),
+                    useMaxCompletionTokens = true,
+                    candidate = candidate,
+                    request = effectiveRequest,
+                    systemText = systemText,
+                    promptText = nonGeminiPromptText,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = effectiveThinkingPrefix,
+                    emitEvent = emitEvent
+                )
+            }
+
+            if (err == null) {
+                return null
+            }
+
+            lastError = err
+            if (isProviderAuthOrBillingError(err)) {
+                failedProviderAuth += candidate.provider
+            }
+
+            val hasMoreCandidates = candidates.drop(index + 1).any { it.provider !in failedProviderAuth }
+            if (hasMoreCandidates && isRecoverableModelError(err)) {
+                previousFailedDisplay = candidate.displayName
+                previousFailReason = summarizeSwitchReason(err)
+                Log.w(TAG, "Auto-switching model after failure on ${candidate.modelId} (${candidate.provider}): ${err.message}")
+                continue
+            } else {
+                return err
+            }
+        }
+
+        return lastError ?: IOException("All configured AI models failed to respond")
+    }
+
+    private suspend fun streamSingleGeminiCandidate(
+        apiKey: String,
+        candidate: ModelCandidate,
+        request: AiRequest,
+        systemText: String,
+        promptText: String,
+        attachedBitmaps: List<Bitmap>,
+        startMs: Long,
+        initialSources: Map<String, SourceCitation>,
+        initialThinkingPrefix: String,
+        emitEvent: suspend (AiStreamEvent) -> Unit
+    ): Throwable? {
+        val modelId = candidate.modelId
+        val effectivePrompt = if (candidate.supportsSystemInstruction) {
+            promptText
+        } else {
+            "[System Instructions]\n$systemText\n\n[User Request]\n$promptText"
+        }
+
         val chatHistory = buildHistoryJsonArray(request.history)
         val hasUrlInPrompt = Regex("https?://\\S+", RegexOption.IGNORE_CASE).containsMatchIn(promptText)
-
         val userTurnParts = JSONArray().apply {
             attachedBitmaps.forEach { bmp ->
                 put(
@@ -865,7 +1069,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     )
                 )
             }
-            put(JSONObject().put("text", promptText))
+            put(JSONObject().put("text", effectivePrompt))
         }
         chatHistory.put(
             JSONObject().apply {
@@ -874,17 +1078,37 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             }
         )
 
-        val candidateModels = resolveGeminiCandidateModels(request.modelTier)
+        val toolsJson = if (candidate.supportsTools) {
+            buildToolsJsonArray(
+                useCodeExecution = request.useCodeExecution,
+                useWebSearch = request.useWebSearch,
+                hasUrlInPrompt = hasUrlInPrompt
+            )
+        } else null
 
-        val toolsJson = buildToolsJsonArray(
-            useCodeExecution = request.useCodeExecution,
-            useWebSearch = request.useWebSearch,
-            hasUrlInPrompt = hasUrlInPrompt
-        )
+        val attemptPlan = buildList {
+            if (candidate.supportsThinkingConfig) {
+                add(Triple(true, toolsJson != null, 0L))
+                add(Triple(true, toolsJson != null, 450L))
+                add(Triple(false, toolsJson != null, 0L))
+                if (toolsJson != null) add(Triple(false, false, 0L))
+            } else {
+                add(Triple(false, toolsJson != null, 0L))
+                if (toolsJson != null) add(Triple(false, false, 0L))
+            }
+        }
 
         var lastError: Throwable? = null
+        var skipDuplicateThinkingRetry = false
 
-        for ((index, modelId) in candidateModels.withIndex()) {
+        for ((attemptIdx, plan) in attemptPlan.withIndex()) {
+            val (includeThinkingConfig, includeTools, preDelayMs) = plan
+            if (skipDuplicateThinkingRetry && includeThinkingConfig) {
+                skipDuplicateThinkingRetry = false
+                continue
+            }
+            if (preDelayMs > 0L) delay(preDelayMs)
+
             val rawAccumulated = StringBuilder()
             val nativeThinkingAccumulated = StringBuilder(
                 if (initialThinkingPrefix.isNotBlank()) "$initialThinkingPrefix\n\n" else ""
@@ -895,354 +1119,326 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             var lastContentEmitMs = 0L
             var lastThinkingEmitMs = 0L
 
-            // First try with thinkingConfig (and retry once after brief backoff if transient 503/429);
-            // if a model rejects thinkingConfig with HTTP 400, jump straight to thinking=false.
-            val attemptPlan = listOf(
-                true to 0L,
-                true to 650L,
-                false to 0L
-            )
+            try {
+                val requestPayload = buildChatRequestJson(
+                    systemText = systemText,
+                    contentsArray = chatHistory,
+                    capabilityMode = request.capabilityMode,
+                    modelTier = request.modelTier,
+                    modelId = modelId,
+                    toolsArray = if (includeTools) toolsJson else null,
+                    includeThinking = includeThinkingConfig,
+                    includeSystemInstruction = candidate.supportsSystemInstruction
+                )
 
-            var skipNextAttempt = false
-            for ((attemptIdx, plan) in attemptPlan.withIndex()) {
-                if (skipNextAttempt) {
-                    skipNextAttempt = false
-                    continue
-                }
-                val (includeThinkingConfig, preDelayMs) = plan
-                if (preDelayMs > 0L) delay(preDelayMs)
+                withTimeout(INFERENCE_TIMEOUT_MS) {
+                    executeSseStreamRequest(
+                        url = "$GEMINI_API_BASE/$modelId:streamGenerateContent?alt=sse&key=$apiKey",
+                        bodyJson = requestPayload
+                    ) { chunkJson ->
+                        chunkJson.optJSONObject("error")?.let { errObj ->
+                            val msg = optNonNullString(errObj, "message").ifBlank { errObj.toString() }
+                            val code = errObj.optInt("code", 500)
+                            throw IOException("HTTP $code: $msg")
+                        }
 
-                rawAccumulated.clear()
-                nativeThinkingAccumulated.clear()
-                if (initialThinkingPrefix.isNotBlank()) {
-                    nativeThinkingAccumulated.append(initialThinkingPrefix).append("\n\n")
-                }
-                collectedSources.clear()
-                collectedSources.putAll(initialSources)
-                lastRenderedContent = ""
-                lastThinkingText = ""
-                lastContentEmitMs = 0L
-                lastThinkingEmitMs = 0L
+                        val candidates = chunkJson.optJSONArray("candidates")
+                        val chunkCandidate = candidates?.optJSONObject(0) ?: return@executeSseStreamRequest
 
-                try {
-                    val requestPayload = buildChatRequestJson(
-                        systemText = systemText,
-                        contentsArray = chatHistory,
-                        capabilityMode = request.capabilityMode,
-                        modelTier = request.modelTier,
-                        modelId = modelId,
-                        toolsArray = toolsJson,
-                        includeThinking = includeThinkingConfig
-                    )
-
-                    withTimeout(INFERENCE_TIMEOUT_MS) {
-                        executeSseStreamRequest(
-                            url = "$GEMINI_API_BASE/$modelId:streamGenerateContent?alt=sse&key=$apiKey",
-                            bodyJson = requestPayload
-                        ) { chunkJson ->
-                            val candidates = chunkJson.optJSONArray("candidates")
-                            val candidate = candidates?.optJSONObject(0) ?: return@executeSseStreamRequest
-
-                            // Grounding web citations
-                            candidate.optJSONObject("groundingMetadata")
-                                ?.optJSONArray("groundingChunks")
-                                ?.let { chunks ->
-                                    for (i in 0 until chunks.length()) {
-                                        val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
-                                        val uri = web.optString("uri").trim()
-                                        if (uri.isNotBlank()) {
-                                            val title = web.optString("title").trim().ifBlank { uri }
-                                            collectedSources[uri] = SourceCitation(title = title, uri = uri)
-                                        }
+                        chunkCandidate.optJSONObject("groundingMetadata")
+                            ?.optJSONArray("groundingChunks")
+                            ?.let { chunks ->
+                                for (i in 0 until chunks.length()) {
+                                    val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
+                                    val uri = optNonNullString(web, "uri").trim()
+                                    if (uri.isNotBlank()) {
+                                        val title = optNonNullString(web, "title").trim().ifBlank { uri }
+                                        collectedSources[uri] = SourceCitation(title = title, uri = uri)
                                     }
                                 }
+                            }
 
-                            val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
-                                ?: return@executeSseStreamRequest
+                        val parts = chunkCandidate.optJSONObject("content")?.optJSONArray("parts")
+                            ?: return@executeSseStreamRequest
 
-                            var hasNewThinking = false
-                            var hasNewContent = false
+                        var hasNewThinking = false
+                        var hasNewContent = false
 
-                            for (i in 0 until parts.length()) {
-                                val part = parts.optJSONObject(i) ?: continue
-                                when {
-                                    part.optBoolean("thought", false) -> {
-                                        val t = part.optString("text")
-                                        if (t.isNotEmpty()) {
-                                            nativeThinkingAccumulated.append(t)
-                                            hasNewThinking = true
-                                        }
+                        for (i in 0 until parts.length()) {
+                            val part = parts.optJSONObject(i) ?: continue
+                            when {
+                                part.optBoolean("thought", false) -> {
+                                    val t = optNonNullString(part, "text")
+                                    if (t.isNotEmpty()) {
+                                        nativeThinkingAccumulated.append(t)
+                                        hasNewThinking = true
                                     }
-                                    part.has("executableCode") -> {
-                                        val ec = part.optJSONObject("executableCode")
-                                        if (ec != null) {
-                                            val lang = ec.optString("language", "python")
-                                                .lowercase()
-                                                .ifBlank { "python" }
-                                            val code = ec.optString("code")
-                                            if (code.isNotBlank()) {
-                                                rawAccumulated.append("\n\n```$lang\n$code\n```\n")
-                                                hasNewContent = true
-                                            }
-                                        }
-                                    }
-                                    part.has("codeExecutionResult") -> {
-                                        val res = part.optJSONObject("codeExecutionResult")
-                                        if (res != null) {
-                                            val outcome = res.optString("outcome", "OUTCOME_OK")
-                                            val output = res.optString("output")
-                                            val statusPrefix = if (!outcome.contains("OK", ignoreCase = true)) {
-                                                "[Execution Status: $outcome]\n"
-                                            } else ""
-                                            val combinedOut = "$statusPrefix$output".trim()
-                                            if (combinedOut.isNotBlank()) {
-                                                rawAccumulated.append("\n```sandbox-output\n$combinedOut\n```\n\n")
-                                                hasNewContent = true
-                                            }
-                                        }
-                                    }
-                                    part.has("text") -> {
-                                        val textPart = part.optString("text")
-                                        if (textPart.isNotEmpty()) {
-                                            rawAccumulated.append(textPart)
+                                }
+                                part.has("executableCode") -> {
+                                    val ec = part.optJSONObject("executableCode")
+                                    if (ec != null) {
+                                        val lang = optNonNullString(ec, "language")
+                                            .lowercase()
+                                            .ifBlank { "python" }
+                                        val code = optNonNullString(ec, "code")
+                                        if (code.isNotBlank()) {
+                                            rawAccumulated.append("\n\n```$lang\n$code\n```\n")
                                             hasNewContent = true
                                         }
                                     }
                                 }
-                            }
-
-                            val nowMs = System.currentTimeMillis()
-                            val elapsed = nowMs - startMs
-                            val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
-
-                            if (nativeThinkingNow.isNotEmpty()) {
-                                if (hasNewThinking && nativeThinkingNow != lastThinkingText &&
-                                    (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
-                                ) {
-                                    lastThinkingText = nativeThinkingNow
-                                    lastThinkingEmitMs = nowMs
-                                    emitEvent(
-                                        AiStreamEvent.ThinkingChunk(
-                                            thinkingText = nativeThinkingNow,
-                                            elapsedMs = elapsed
-                                        )
-                                    )
-                                }
-                                if (hasNewContent) {
-                                    val cleanContent = rawAccumulated.toString()
-                                    if (cleanContent != lastRenderedContent &&
-                                        (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
-                                    ) {
-                                        lastRenderedContent = cleanContent
-                                        lastContentEmitMs = nowMs
-                                        emitEvent(AiStreamEvent.ContentChunk(cleanContent))
+                                part.has("codeExecutionResult") -> {
+                                    val res = part.optJSONObject("codeExecutionResult")
+                                    if (res != null) {
+                                        val outcome = optNonNullString(res, "outcome").ifBlank { "OUTCOME_OK" }
+                                        val output = optNonNullString(res, "output")
+                                        val statusPrefix = if (!outcome.contains("OK", ignoreCase = true)) {
+                                            "[Execution Status: $outcome]\n"
+                                        } else ""
+                                        val combinedOut = "$statusPrefix$output".trim()
+                                        if (combinedOut.isNotBlank()) {
+                                            rawAccumulated.append("\n```sandbox-output\n$combinedOut\n```\n\n")
+                                            hasNewContent = true
+                                        }
                                     }
                                 }
-                            } else if (hasNewContent || hasNewThinking) {
-                                val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                                if (!parsed.thinking.isNullOrBlank() && parsed.thinking != lastThinkingText &&
-                                    (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
-                                ) {
-                                    lastThinkingText = parsed.thinking
-                                    lastThinkingEmitMs = nowMs
-                                    emitEvent(
-                                        AiStreamEvent.ThinkingChunk(
-                                            thinkingText = parsed.thinking,
-                                            elapsedMs = elapsed
-                                        )
-                                    )
-                                }
-                                if (parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent &&
-                                    (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
-                                ) {
-                                    lastRenderedContent = parsed.answer
-                                    lastContentEmitMs = nowMs
-                                    emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                                part.has("text") -> {
+                                    val textPart = optNonNullString(part, "text")
+                                    if (textPart.isNotEmpty()) {
+                                        rawAccumulated.append(textPart)
+                                        hasNewContent = true
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    val nativeFinalThoughts = nativeThinkingAccumulated.toString().trim().ifBlank { null }
-                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                    val finalThinking = nativeFinalThoughts ?: parsed.thinking
-                    val finalAnswer = if (nativeFinalThoughts != null) {
-                        rawAccumulated.toString().trim()
-                    } else {
-                        parsed.answer.ifBlank { rawAccumulated.toString().trim() }
-                    }
-                    val totalDuration = System.currentTimeMillis() - startMs
+                        val nowMs = System.currentTimeMillis()
+                        val elapsed = nowMs - startMs
+                        val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
 
-                    if (finalAnswer.isNotBlank()) {
-                        emitEvent(
-                            AiStreamEvent.Completed(
-                                fullText = finalAnswer,
-                                thinkingText = finalThinking,
-                                thinkingDurationMs = if (finalThinking != null) totalDuration else 0L,
-                                sources = collectedSources.values.toList()
-                            )
+                        if (nativeThinkingNow.isNotEmpty()) {
+                            if (hasNewThinking && nativeThinkingNow != lastThinkingText &&
+                                (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
+                            ) {
+                                lastThinkingText = nativeThinkingNow
+                                lastThinkingEmitMs = nowMs
+                                emitEvent(
+                                    AiStreamEvent.ThinkingChunk(
+                                        thinkingText = nativeThinkingNow,
+                                        elapsedMs = elapsed
+                                    )
+                                )
+                            }
+                            if (hasNewContent) {
+                                val cleanContent = rawAccumulated.toString()
+                                if (cleanContent != lastRenderedContent &&
+                                    (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
+                                ) {
+                                    lastRenderedContent = cleanContent
+                                    lastContentEmitMs = nowMs
+                                    emitEvent(AiStreamEvent.ContentChunk(cleanContent))
+                                }
+                            }
+                        } else if (hasNewContent || hasNewThinking) {
+                            val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                            if (!parsed.thinking.isNullOrBlank() && parsed.thinking != lastThinkingText &&
+                                (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
+                            ) {
+                                lastThinkingText = parsed.thinking
+                                lastThinkingEmitMs = nowMs
+                                emitEvent(
+                                    AiStreamEvent.ThinkingChunk(
+                                        thinkingText = parsed.thinking,
+                                        elapsedMs = elapsed
+                                    )
+                                )
+                            }
+                            if (parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent &&
+                                (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
+                            ) {
+                                lastRenderedContent = parsed.answer
+                                lastContentEmitMs = nowMs
+                                emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                            }
+                        }
+                    }
+                }
+
+                val nativeFinalThoughts = nativeThinkingAccumulated.toString().trim().ifBlank { null }
+                val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                val finalThinking = listOfNotNull(
+                    nativeFinalThoughts,
+                    parsed.thinking?.ifBlank { null }
+                ).distinct().joinToString("\n\n").trim().ifBlank { null }
+                val finalAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                val totalDuration = System.currentTimeMillis() - startMs
+
+                if (finalAnswer.isNotBlank()) {
+                    emitEvent(
+                        AiStreamEvent.Completed(
+                            fullText = finalAnswer,
+                            thinkingText = finalThinking,
+                            thinkingDurationMs = if (finalThinking != null) totalDuration else 0L,
+                            sources = collectedSources.values.toList(),
+                            modelDisplayName = candidate.displayName
                         )
-                        return null
-                    } else {
-                        lastError = IOException("Empty response from $modelId")
-                        break
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    Log.e(TAG, "Aura AI stream timed out on $modelId", e)
-                    if (rawAccumulated.isNotBlank()) {
-                        val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                        val partialAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                    )
+                    return null
+                } else {
+                    lastError = IOException("Empty response from $modelId")
+                    break
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Aura AI stream timed out on $modelId", e)
+                if (rawAccumulated.isNotBlank()) {
+                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                    val partialAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                    if (partialAnswer.isNotBlank()) {
                         emitEvent(
                             AiStreamEvent.Completed(
                                 fullText = partialAnswer,
                                 thinkingText = parsed.thinking,
                                 thinkingDurationMs = System.currentTimeMillis() - startMs,
-                                sources = collectedSources.values.toList()
+                                sources = collectedSources.values.toList(),
+                                modelDisplayName = candidate.displayName
                             )
                         )
                         return null
                     }
-                    lastError = e
-                    break
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    lastError = t
-                    Log.e(TAG, "Aura AI streaming failed on $modelId (attempt=$attemptIdx, thinking=$includeThinkingConfig): ${t.message}", t)
-                    if (rawAccumulated.isNotEmpty()) {
-                        // Stream dropped mid-answer after producing output: don't discard output, let user keep partial or retry cleanly
-                        val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                        val partial = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
-                        if (partial.isNotBlank()) {
-                            emitEvent(
-                                AiStreamEvent.Completed(
-                                    fullText = partial,
-                                    thinkingText = parsed.thinking,
-                                    thinkingDurationMs = System.currentTimeMillis() - startMs,
-                                    sources = collectedSources.values.toList()
-                                )
+                }
+                lastError = e
+                break
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                lastError = t
+                Log.e(TAG, "Aura AI streaming failed on $modelId (attempt=$attemptIdx): ${t.message}", t)
+                if (rawAccumulated.isNotEmpty()) {
+                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                    val partial = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                    if (partial.isNotBlank()) {
+                        emitEvent(
+                            AiStreamEvent.Completed(
+                                fullText = partial,
+                                thinkingText = parsed.thinking,
+                                thinkingDurationMs = System.currentTimeMillis() - startMs,
+                                sources = collectedSources.values.toList(),
+                                modelDisplayName = candidate.displayName
                             )
-                            return null
-                        }
-                    }
-                    val msgLower = (t.message ?: "").lowercase()
-                    val isConfigIssue = includeThinkingConfig &&
-                        (msgLower.contains("thinking") || msgLower.contains("400") || msgLower.contains("invalid_argument"))
-                    val isTransientBusy = attemptIdx == 0 && (
-                        msgLower.contains("503") || msgLower.contains("unavailable") ||
-                            msgLower.contains("overloaded") || msgLower.contains("429") ||
-                            msgLower.contains("500")
                         )
-                    if (isTransientBusy) {
-                        continue // next attempt has 650ms backoff
-                    } else if (isConfigIssue && attemptIdx < attemptPlan.lastIndex) {
-                        if (attemptIdx == 0) {
-                            skipNextAttempt = true // skip duplicate thinking=true retry and jump straight to thinking=false
-                        }
-                        continue
-                    } else {
-                        break
+                        return null
                     }
                 }
-            }
-
-            val hasNext = index < candidateModels.lastIndex
-            val err = lastError
-            if (hasNext && err != null && isRecoverableModelError(err)) {
-                Log.w(TAG, "Switching to next live Aura model after error on $modelId: ${err.message}")
-                continue
-            } else {
-                return err ?: IOException("Cloud stream failed")
+                val msgLower = (t.message ?: "").lowercase()
+                val isConfigIssue = msgLower.contains("thinking") ||
+                    msgLower.contains("400") ||
+                    msgLower.contains("invalid_argument") ||
+                    msgLower.contains("tool")
+                val isTransientBusy = attemptIdx == 0 && (
+                    msgLower.contains("503") || msgLower.contains("unavailable") ||
+                        msgLower.contains("overloaded") || msgLower.contains("429") ||
+                        msgLower.contains("500")
+                    )
+                if (isTransientBusy) {
+                    continue
+                } else if (isConfigIssue && attemptIdx < attemptPlan.lastIndex) {
+                    if (attemptIdx == 0 && includeThinkingConfig) {
+                        skipDuplicateThinkingRetry = true
+                    }
+                    continue
+                } else {
+                    break
+                }
             }
         }
 
-        return lastError ?: IOException("Cloud stream failed")
+        return lastError ?: IOException("Gemini stream failed on $modelId")
     }
 
-    private suspend fun streamViaGroqChain(
-        groqKey: String,
+    private suspend fun streamSingleOpenAiCompatCandidate(
+        url: String,
+        apiKey: String,
+        extraHeaders: Map<String, String>,
+        useMaxCompletionTokens: Boolean,
+        candidate: ModelCandidate,
         request: AiRequest,
         systemText: String,
         promptText: String,
         attachedBitmaps: List<Bitmap>,
         startMs: Long,
-        initialSources: Map<String, SourceCitation> = emptyMap(),
-        initialThinkingPrefix: String = "",
+        initialSources: Map<String, SourceCitation>,
+        initialThinkingPrefix: String,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ): Throwable? {
-        val effectiveGroqCapability = if (request.useWebSearch && request.capabilityMode == CapabilityMode.STANDARD) {
-            CapabilityMode.DEEP_THINK
-        } else {
-            request.capabilityMode
-        }
-        val candidateModels = selectGroqFallbackModels(
-            capabilityMode = effectiveGroqCapability,
-            modelTier = request.modelTier,
-            hasImageAttachment = attachedBitmaps.isNotEmpty()
-        )
+        val modelId = candidate.modelId
+        val visionBitmaps = if (candidate.supportsVision) attachedBitmaps else emptyList()
         val messagesArray = buildGroqMessagesArray(
             systemText = systemText,
             history = request.history,
             promptText = promptText,
-            attachedBitmaps = attachedBitmaps
+            attachedBitmaps = visionBitmaps
         )
-        val headers = mapOf("Authorization" to "Bearer $groqKey")
+        val headers = buildMap {
+            put("Authorization", "Bearer $apiKey")
+            putAll(extraHeaders)
+        }
         val resolvedSources = initialSources.values.toList()
-        var lastError: Throwable? = null
+        val rawAccumulated = StringBuilder()
+        val nativeThinkingAccumulated = StringBuilder(
+            if (initialThinkingPrefix.isNotBlank()) "$initialThinkingPrefix\n\n" else ""
+        )
+        var lastRenderedContent = ""
+        var lastThinkingText = ""
+        var lastContentEmitMs = 0L
+        var lastThinkingEmitMs = 0L
 
-        for ((index, modelId) in candidateModels.withIndex()) {
-            val rawAccumulated = StringBuilder()
-            val nativeThinkingAccumulated = StringBuilder(
-                if (initialThinkingPrefix.isNotBlank()) "$initialThinkingPrefix\n\n" else ""
-            )
-            var lastRenderedContent = ""
-            var lastThinkingText = ""
-            var lastContentEmitMs = 0L
-            var lastThinkingEmitMs = 0L
-
-            try {
-                val maxTokens = when {
-                    modelId.contains("8b-instant") || modelId.contains("llama-4-scout") -> 8192
-                    else -> 16384
-                }
-                val payload = JSONObject().apply {
-                    put("model", modelId)
-                    put("messages", messagesArray)
-                    put("stream", true)
+        return try {
+            val maxTokens = when {
+                modelId.contains("8b-instant") || modelId.contains("llama-4-scout") -> 8192
+                else -> 16384
+            }
+            val payload = JSONObject().apply {
+                put("model", modelId)
+                put("messages", messagesArray)
+                put("stream", true)
+                if (!modelId.contains("deepseek-reasoner")) {
                     put(
                         "temperature",
                         when {
+                            request.capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
                             request.useWebSearch -> 0.25
-                            request.capabilityMode == CapabilityMode.CODE_ARCHITECT ||
-                                request.capabilityMode == CapabilityMode.CONCISE -> 0.35
-                            else -> 0.65
+                            request.capabilityMode == CapabilityMode.CONCISE -> 0.35
+                            request.capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
+                            else -> 0.6
                         }
                     )
-                    put("max_completion_tokens", maxTokens)
                 }
+                if (useMaxCompletionTokens) {
+                    put("max_completion_tokens", maxTokens)
+                } else {
+                    put("max_tokens", maxTokens)
+                }
+            }
 
-                withTimeout(INFERENCE_TIMEOUT_MS) {
-                    executeSseStreamRequest(
-                        url = GROQ_API_URL,
-                        bodyJson = payload,
-                        headers = headers
-                    ) { chunkJson ->
-                        val choice = chunkJson.optJSONArray("choices")?.optJSONObject(0)
-                            ?: return@executeSseStreamRequest
-                        val delta = choice.optJSONObject("delta") ?: return@executeSseStreamRequest
-
-                        val reasoningDelta = delta.optString("reasoning")
-                            .ifEmpty { delta.optString("reasoning_content") }
+            withTimeout(INFERENCE_TIMEOUT_MS) {
+                executeSseStreamRequest(
+                    url = url,
+                    bodyJson = payload,
+                    headers = headers
+                ) { chunkJson ->
+                    parseOpenAiCompatSseChunk(chunkJson)?.let { deltaChunk ->
+                        if (deltaChunk.errorMessage != null) {
+                            throw IOException(deltaChunk.errorMessage)
+                        }
                         var hasNewThinking = false
                         var hasNewContent = false
 
-                        if (reasoningDelta.isNotEmpty()) {
-                            nativeThinkingAccumulated.append(reasoningDelta)
+                        if (deltaChunk.reasoningDelta.isNotEmpty()) {
+                            nativeThinkingAccumulated.append(deltaChunk.reasoningDelta)
                             hasNewThinking = true
                         }
-                        val contentDelta = delta.optString("content")
-                        if (contentDelta.isNotEmpty()) {
-                            rawAccumulated.append(contentDelta)
+                        if (deltaChunk.contentDelta.isNotEmpty()) {
+                            rawAccumulated.append(deltaChunk.contentDelta)
                             hasNewContent = true
                         }
 
@@ -1278,77 +1474,102 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                         }
                     }
                 }
+            }
 
-                val nativeFinalThoughts = nativeThinkingAccumulated.toString().trim().ifBlank { null }
-                val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                val finalThinking = listOfNotNull(
-                    nativeFinalThoughts,
-                    parsed.thinking?.ifBlank { null }
-                ).joinToString("\n\n").trim().ifBlank { null }
-                val finalAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
-                val totalDuration = System.currentTimeMillis() - startMs
+            val nativeFinalThoughts = nativeThinkingAccumulated.toString().trim().ifBlank { null }
+            val parsed = splitThinkingAndContent(rawAccumulated.toString())
+            val finalThinking = listOfNotNull(
+                nativeFinalThoughts,
+                parsed.thinking?.ifBlank { null }
+            ).joinToString("\n\n").trim().ifBlank { null }
+            val finalAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+            val totalDuration = System.currentTimeMillis() - startMs
 
-                if (finalAnswer.isNotBlank()) {
-                    emitEvent(
-                        AiStreamEvent.Completed(
-                            fullText = finalAnswer,
-                            thinkingText = finalThinking,
-                            thinkingDurationMs = if (finalThinking != null) totalDuration else 0L,
-                            sources = resolvedSources
-                        )
+            if (finalAnswer.isNotBlank()) {
+                emitEvent(
+                    AiStreamEvent.Completed(
+                        fullText = finalAnswer,
+                        thinkingText = finalThinking,
+                        thinkingDurationMs = if (finalThinking != null) totalDuration else 0L,
+                        sources = resolvedSources,
+                        modelDisplayName = candidate.displayName
                     )
-                    return null
-                } else {
-                    lastError = IOException("Empty response from Groq model $modelId")
-                }
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Groq stream timed out on $modelId", e)
-                if (rawAccumulated.isNotBlank()) {
-                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                    val partialAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                )
+                null
+            } else {
+                IOException("Empty response from ${candidate.displayName} ($modelId)")
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.e(TAG, "${candidate.provider} stream timed out on $modelId", e)
+            val parsed = splitThinkingAndContent(rawAccumulated.toString())
+            val partialAnswer = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+            if (partialAnswer.isNotBlank()) {
+                emitEvent(
+                    AiStreamEvent.Completed(
+                        fullText = partialAnswer,
+                        thinkingText = parsed.thinking,
+                        thinkingDurationMs = System.currentTimeMillis() - startMs,
+                        sources = resolvedSources,
+                        modelDisplayName = candidate.displayName
+                    )
+                )
+                null
+            } else {
+                e
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(TAG, "${candidate.provider} streaming failed on $modelId: ${t.message}", t)
+            if (rawAccumulated.isNotEmpty()) {
+                val parsed = splitThinkingAndContent(rawAccumulated.toString())
+                val partial = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
+                if (partial.isNotBlank()) {
                     emitEvent(
                         AiStreamEvent.Completed(
-                            fullText = partialAnswer,
+                            fullText = partial,
                             thinkingText = parsed.thinking,
                             thinkingDurationMs = System.currentTimeMillis() - startMs,
-                            sources = resolvedSources
+                            sources = resolvedSources,
+                            modelDisplayName = candidate.displayName
                         )
                     )
                     return null
                 }
-                lastError = e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                lastError = t
-                Log.e(TAG, "Groq streaming failed on $modelId: ${t.message}", t)
-                if (rawAccumulated.isNotEmpty()) {
-                    val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                    val partial = parsed.answer.ifBlank { rawAccumulated.toString().trim() }
-                    if (partial.isNotBlank()) {
-                        emitEvent(
-                            AiStreamEvent.Completed(
-                                fullText = partial,
-                                thinkingText = parsed.thinking,
-                                thinkingDurationMs = System.currentTimeMillis() - startMs,
-                                sources = resolvedSources
-                            )
-                        )
-                        return null
-                    }
-                }
             }
-
-            val hasNext = index < candidateModels.lastIndex
-            if (hasNext && isRecoverableModelError(lastError ?: IOException())) {
-                Log.w(TAG, "Switching to next fast Groq model after error on $modelId: ${lastError?.message}")
-                continue
-            } else {
-                return lastError ?: IOException("Fast engine request failed")
-            }
+            t
         }
+    }
 
-        return lastError ?: IOException("Fast engine request failed")
+    private fun isProviderAuthOrBillingError(t: Throwable): Boolean {
+        val msg = (t.message ?: t.localizedMessage ?: "").lowercase()
+        return msg.contains("401") ||
+            msg.contains("402") ||
+            msg.contains("api_key_invalid") ||
+            msg.contains("invalid_api_key") ||
+            msg.contains("api key not valid") ||
+            msg.contains("unauthorized") ||
+            msg.contains("insufficient balance") ||
+            msg.contains("unauthenticated")
+    }
+
+    private fun summarizeSwitchReason(t: Throwable): String {
+        val msg = (t.message ?: t.localizedMessage ?: "").lowercase()
+        return when {
+            msg.contains("429") || msg.contains("rate") || msg.contains("quota") || msg.contains("resource_exhausted") ->
+                "Rate limit / quota reached"
+            msg.contains("503") || msg.contains("502") || msg.contains("504") || msg.contains("overloaded") || msg.contains("unavailable") ->
+                "Server busy"
+            msg.contains("404") || msg.contains("not found") || msg.contains("decommissioned") ->
+                "Endpoint unavailable"
+            msg.contains("401") || msg.contains("403") || msg.contains("api_key") || msg.contains("unauthorized") ->
+                "Provider auth error"
+            msg.contains("402") || msg.contains("balance") || msg.contains("billing") ->
+                "Paid quota required"
+            msg.contains("timeout") ->
+                "Request timed out"
+            else -> "Temporary error"
+        }
     }
 
     private suspend fun generateOrEditImage(request: AiRequest): AiStreamEvent {
@@ -1364,6 +1585,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
         val candidateImageModels = buildList {
             add(request.modelTier.id)
+            add("gemini-2.5-flash-image")
+            add("gemini-2.0-flash-exp-image-generation")
             add("gemini-3.1-flash-lite-image")
             add("gemini-nano-banana-2.1")
         }.distinct()
@@ -1572,29 +1795,47 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         modelTier: AiModelTier,
         modelId: String,
         toolsArray: JSONArray?,
-        includeThinking: Boolean
+        includeThinking: Boolean,
+        includeSystemInstruction: Boolean = true
     ): JSONObject {
         val isProModel = modelId.contains("2.5-pro", ignoreCase = true)
+        val maxOut = when {
+            modelId.startsWith("gemma-", ignoreCase = true) -> 8192
+            modelId.contains("2.0-flash", ignoreCase = true) -> 8192
+            else -> 65536
+        }
         return JSONObject().apply {
-            put(
-                "systemInstruction",
-                JSONObject().put(
-                    "parts",
-                    JSONArray().put(JSONObject().put("text", systemText))
+            if (includeSystemInstruction) {
+                put(
+                    "systemInstruction",
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", systemText))
+                    )
                 )
-            )
+            }
             put("contents", contentsArray)
             val generationConfig = JSONObject().apply {
-                put("maxOutputTokens", 65536)
+                put("maxOutputTokens", maxOut)
+                put(
+                    "temperature",
+                    when {
+                        capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
+                        capabilityMode == CapabilityMode.DEEP_RESEARCH -> 0.25
+                        capabilityMode == CapabilityMode.CONCISE -> 0.35
+                        capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
+                        else -> 0.6
+                    }
+                )
                 if (includeThinking) {
                     val thinkingObj = JSONObject().apply {
                         when {
-                            capabilityMode == CapabilityMode.DEEP_THINK ||
-                                capabilityMode == CapabilityMode.CODE_ARCHITECT ||
+                            capabilityMode == CapabilityMode.CODE_ARCHITECT ||
+                                capabilityMode == CapabilityMode.DEEP_THINK ||
                                 capabilityMode == CapabilityMode.DEEP_RESEARCH ||
                                 modelTier == AiModelTier.GEMINI_4_ARGON -> {
                                 put("includeThoughts", true)
-                                put("thinkingBudget", 8192)
+                                put("thinkingBudget", 12288)
                             }
                             capabilityMode == CapabilityMode.CONCISE -> {
                                 put("includeThoughts", false)
@@ -1724,12 +1965,18 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             else -> {
                 raw.replace(Regex("https?://\\S+"), "")
                     .replace(Regex("gemini[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                    .replace(Regex("gemma[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                    .replace(Regex("deepseek[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
+                    .replace(Regex("openrouter[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
                     .replace(Regex("groq[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
+                    .replace(Regex("exa\\s*api|exa\\.ai|\\bexa\\b", RegexOption.IGNORE_CASE), "Aura Search")
                     .replace(Regex("(meta-)?llama[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
                     .replace(Regex("(openai/)?gpt-oss[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                    .replace(Regex("(qwen|mistral|tngtech|anthropic|claude)[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
                     .replace(Regex("openai", RegexOption.IGNORE_CASE), "Abhynex")
                     .replace(Regex("generativelanguage\\.googleapis\\.com\\S*", RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("api\\.groq\\.com\\S*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("api\\.(groq|deepseek|exa)\\.\\S*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("openrouter\\.ai\\S*", RegexOption.IGNORE_CASE), "")
                     .replace(Regex("google", RegexOption.IGNORE_CASE), "Abhynex")
                     .replace(Regex("\\s+"), " ")
                     .trim()
@@ -1752,12 +1999,16 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             Current Date & Time: $currentDateTime
             Your name is **Aura AI**, created and engineered by **Abhi** (founder of **Abhynex**).
             If anyone asks who created, built, owns, or made you, clearly and proudly state that **Abhi** built you at **Abhynex**.
-            Never reveal or mention Gemini, Groq, Llama, OpenAI, GPT, Google, Claude, Anthropic, or any underlying model IDs; always represent yourself exclusively as **Aura AI** by **Abhynex**.
+            STRICT CONFIDENTIALITY RULE: NEVER mention, expose, or reference Gemini, DeepSeek, Groq, OpenRouter, Exa, Llama, Gemma, OpenAI, GPT, Google, Claude, Anthropic, or ANY third-party API/provider/model ID anywhere in your thinking or chat response. Always present yourself exclusively as **Aura AI** by **Abhynex**.
 
-            Aura Apex Intelligence & Zero-Error Engineering Protocol:
-            1. **Action-First Mastery**: Deliver complete, structured, authoritative answers immediately. If the user asks for a hard/practice problem, pick a classic challenging problem and solve it fully — never ask them to send one first.
+            Aura Apex Executive & Principal Engineering Protocol:
+            1. **Executive Publication Formatting**: Open directly with the core solution — zero filler, zero robotic preamble ("Sure!", "Great question!"). Structure every non-trivial answer cleanly with `##` / `###` section headings, **bold lead-ins** on crisp bullets, Markdown comparison tables (`| Option | ... |`) for trade-offs, and inline `code` formatting for symbols, commands, and file paths.
             2. **Language Mastery**: ${language.promptInstruction} Always support English, Devanagari Marathi (मराठी), Romanized Marathi, Devanagari Hindi (हिन्दी), and Hinglish seamlessly.
-            3. **Staff-Engineer Multi-Pass Coding**: Before finalizing any code, mentally trace types, nullability, concurrency/threads, coroutine cancellation, resource cleanup, security boundaries, and edge-case inputs. Deliver 100% complete, compile-ready code inside fenced language blocks (e.g., ```kotlin, ```python, ```ts, or ```diff for patches) with full imports and defensive error handling — NEVER use `// TODO`, ellipsis (`...`), or pseudo-code.
+            3. **Principal Software Engineer Coding Standard**: For EVERY coding, debugging, or architecture task:
+               - **Design & Invariants First**: Briefly state the architecture, data flow, and edge cases being guarded (2–4 crisp bullets) before emitting code.
+               - **Complete, Compile-Ready Code**: Organize cleanly by file using `// File: path/FileName.ext` on the first line inside fenced code blocks (```` ```kotlin ````, ```` ```python ````, ```` ```ts ````, etc.) with 100% complete imports, strict types, null/bounds checks, coroutine cancellation & thread safety, and proper resource cleanup. Strictly ZERO `// TODO`, ZERO `...` omissions, ZERO stubbed logic.
+               - **Surgical Diffs for Bug Fixes**: When fixing or refactoring existing code, diagnose the root cause concisely, emit a clean ```` ```diff ```` patch showing exact `-`/`+` lines, AND provide the full verified function/file.
+               - **Verification & Edge Cases**: Note boundary cases handled and include concrete unit tests or verification steps when building non-trivial logic.
             4. **KaTeX / LaTeX Mathematics**: Format ALL equations, calculus, linear algebra, and physics cleanly with KaTeX delimiters: `${'$'}...${'$'}` inline and standalone `${'$'}${'$'}...${'$'}${'$'}` display blocks for every derivation step (`\int`, `\frac{a}{b}`, `\lim`, `\sum`, `\sqrt`, matrices), and place final answers inside `${'$'}${'$'}\boxed{...}${'$'}${'$'}` with a sanity check.
             5. **Batch & Multi-Question Completeness (10–20+ Questions)**: Whenever the user sends a batch or list of multiple questions (e.g., 5, 10, 15, or 20+ questions in one prompt), you MUST solve **EVERY SINGLE QUESTION sequentially from Q1 through QN** with clear numbered headings (`### Q1.`, `### Q2.`, ...), complete step-by-step reasoning, KaTeX math / code, and final boxed answers — NEVER skip middle questions, never summarize "similar to above", and never truncate early.
             6. **Interactive Diagrams & Web Artifacts**: When asked for interactive visual UI, flowcharts, architecture diagrams, or interactive HTML cards, output self-contained ```html, ```svg, or ```mermaid blocks so Aura Live Artifacts can preview them directly.
@@ -1785,15 +2036,15 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
         val modeInstruction = when (capabilityMode) {
             CapabilityMode.STANDARD ->
-                "Provide well-structured Markdown answers with clear headings, KaTeX math blocks when relevant, and clean code."
+                "Deliver an executive-grade, cleanly structured Markdown answer with crisp hierarchy, Principal-tier zero-error code when coding is involved, and KaTeX math blocks when relevant."
             CapabilityMode.DEEP_THINK ->
-                "Reason rigorously from first principles, check edge cases and adversarial failure modes, and present a complete verified Markdown/KaTeX/code solution."
+                "Reason rigorously from first principles, audit edge cases and adversarial failure modes, and present a complete verified Markdown/KaTeX/code solution."
             CapabilityMode.CODE_ARCHITECT ->
-                "Architect complete, zero-error, production-grade multi-file solutions with full imports, strict typing, thread/null safety, edge-case coverage, and verification unit tests."
+                "Operate in Principal Code Architect Mode: outline architecture & invariants briefly, write 100% compile-ready multi-file production code (`// File: ...`) with full imports, strict typing, thread/coroutine/null safety, edge-case guards, clean ```diff patches when fixing bugs, and verification unit tests."
             CapabilityMode.DEEP_RESEARCH ->
                 "Operate as an autonomous Deep Research Analyst: synthesize cross-verified facts into executive summaries, Markdown comparison matrices, risk analyses, and cited recommendations."
             CapabilityMode.CONCISE ->
-                "Be direct, crisp, and scannable using concise bullet points, clean equations, and zero filler."
+                "Be direct, crisp, and scannable using executive bullet points, clean equations, and zero filler."
         }
 
         return "$brandRule$searchDirective$sandboxDirective$memoryBlock$vaultDirective\n\nPersona Focus: $personaPrompt\n\nMode: $modeInstruction"
@@ -1804,12 +2055,318 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     }
 
     companion object {
-        fun resolveGeminiCandidateModels(modelTier: AiModelTier): List<String> {
-            return when (modelTier) {
-                AiModelTier.GEMINI_4_ARGON -> listOf("gemini-2.5-pro", "gemini-2.5-flash")
-                AiModelTier.GEMINI_3_5_FLASH_LITE -> listOf("gemini-2.5-flash-lite", "gemini-2.5-flash")
-                else -> listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite")
+        data class OpenAiCompatSseDelta(
+            val reasoningDelta: String = "",
+            val contentDelta: String = "",
+            val errorMessage: String? = null
+        )
+
+        private fun optNonNullString(obj: JSONObject, key: String): String {
+            return if (obj.isNull(key)) "" else obj.optString(key, "")
+        }
+
+        fun parseOpenAiCompatSseChunk(chunkJson: JSONObject): OpenAiCompatSseDelta? {
+            chunkJson.optJSONObject("error")?.let { errObj ->
+                val msg = optNonNullString(errObj, "message").ifBlank { errObj.toString() }
+                val code = errObj.opt("code")?.toString().orEmpty()
+                return OpenAiCompatSseDelta(errorMessage = "HTTP $code: $msg".trim())
             }
+            val choice = chunkJson.optJSONArray("choices")?.optJSONObject(0) ?: return null
+            val delta = choice.optJSONObject("delta") ?: return null
+            val reasoning = optNonNullString(delta, "reasoning")
+                .ifEmpty { optNonNullString(delta, "reasoning_content") }
+            val content = optNonNullString(delta, "content")
+            return OpenAiCompatSseDelta(reasoningDelta = reasoning, contentDelta = content)
+        }
+
+        val ALL_FREE_GEMINI_CANDIDATES: List<ModelCandidate> = listOf(
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-3.8-flash",
+                displayName = "Gemini 3.8 Flash",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-3.7-flash",
+                displayName = "Gemini 3.7 Flash",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-3.6-flash",
+                displayName = "Gemini 3.6 Flash",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-3.5-flash",
+                displayName = "Gemini 3.5 Flash",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-3.5-flash-lite",
+                displayName = "Gemini 3.5 Flash-Lite",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-2.5-flash",
+                displayName = "Gemini 2.5 Flash",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-2.5-pro",
+                displayName = "Gemini 2.5 Pro",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-2.5-flash-lite",
+                displayName = "Gemini 2.5 Flash-Lite",
+                supportsThinkingConfig = true,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemini-2.0-flash",
+                displayName = "Gemini 2.0 Flash",
+                supportsThinkingConfig = false,
+                supportsSystemInstruction = true,
+                supportsTools = true,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemma-3-27b-it",
+                displayName = "Gemma 3 27B",
+                supportsThinkingConfig = false,
+                supportsSystemInstruction = false,
+                supportsTools = false,
+                supportsVision = true
+            ),
+            ModelCandidate(
+                provider = ModelProvider.GEMINI,
+                modelId = "gemma-3-12b-it",
+                displayName = "Gemma 3 12B",
+                supportsThinkingConfig = false,
+                supportsSystemInstruction = false,
+                supportsTools = false,
+                supportsVision = true
+            )
+        )
+
+        val ALL_FREE_OPENROUTER_DEEPSEEK_CANDIDATES: List<ModelCandidate> = listOf(
+            ModelCandidate(
+                provider = ModelProvider.OPENROUTER,
+                modelId = "deepseek/deepseek-r1-0528:free",
+                displayName = "DeepSeek R1 (0528)",
+                supportsVision = false
+            ),
+            ModelCandidate(
+                provider = ModelProvider.OPENROUTER,
+                modelId = "deepseek/deepseek-chat-v3-0324:free",
+                displayName = "DeepSeek V3 (0324)",
+                supportsVision = false
+            ),
+            ModelCandidate(
+                provider = ModelProvider.OPENROUTER,
+                modelId = "tngtech/deepseek-r1t2-chimera:free",
+                displayName = "DeepSeek R1T2 Chimera",
+                supportsVision = false
+            ),
+            ModelCandidate(
+                provider = ModelProvider.OPENROUTER,
+                modelId = "deepseek/deepseek-r1:free",
+                displayName = "DeepSeek R1",
+                supportsVision = false
+            ),
+            ModelCandidate(
+                provider = ModelProvider.OPENROUTER,
+                modelId = "openrouter/free",
+                displayName = "OpenRouter Free Auto",
+                supportsVision = false
+            )
+        )
+
+        val DIRECT_DEEPSEEK_CANDIDATES: List<ModelCandidate> = listOf(
+            ModelCandidate(
+                provider = ModelProvider.DEEPSEEK,
+                modelId = "deepseek-reasoner",
+                displayName = "DeepSeek R1 Reasoner",
+                supportsVision = false
+            ),
+            ModelCandidate(
+                provider = ModelProvider.DEEPSEEK,
+                modelId = "deepseek-chat",
+                displayName = "DeepSeek V3 Chat",
+                supportsVision = false
+            )
+        )
+
+        fun resolveGeminiCandidateModels(modelTier: AiModelTier): List<String> {
+            val preferredPrimary = when (modelTier) {
+                AiModelTier.GEMINI_3_8_FLASH -> "gemini-3.8-flash"
+                AiModelTier.GEMINI_3_7_FLASH -> "gemini-3.7-flash"
+                AiModelTier.GEMINI_3_6_FLASH -> "gemini-3.6-flash"
+                AiModelTier.GEMINI_3_5_FLASH -> "gemini-3.5-flash"
+                AiModelTier.GEMINI_3_5_FLASH_LITE -> "gemini-3.5-flash-lite"
+                AiModelTier.GEMINI_2_5_FLASH -> "gemini-2.5-flash"
+                AiModelTier.GEMINI_4_ARGON -> "gemini-2.5-pro"
+                AiModelTier.GEMINI_2_5_FLASH_LITE -> "gemini-2.5-flash-lite"
+                AiModelTier.GEMINI_2_0_FLASH -> "gemini-2.0-flash"
+                AiModelTier.GEMMA_3_27B -> "gemma-3-27b-it"
+                AiModelTier.GEMMA_3_12B -> "gemma-3-12b-it"
+                else -> "gemini-3.8-flash"
+            }
+            return buildList {
+                add(preferredPrimary)
+                ALL_FREE_GEMINI_CANDIDATES.forEach { candidate ->
+                    if (candidate.modelId !in this) add(candidate.modelId)
+                }
+            }
+        }
+
+        fun resolveDeepSeekCandidates(
+            modelTier: AiModelTier,
+            hasOpenRouterKey: Boolean,
+            hasDeepSeekKey: Boolean
+        ): List<ModelCandidate> {
+            val orById = ALL_FREE_OPENROUTER_DEEPSEEK_CANDIDATES.associateBy { it.modelId }
+            val dsById = DIRECT_DEEPSEEK_CANDIDATES.associateBy { it.modelId }
+            val ordered = mutableListOf<ModelCandidate>()
+
+            fun addOr(id: String) {
+                if (hasOpenRouterKey) orById[id]?.let { ordered.add(it) }
+            }
+            fun addDs(id: String) {
+                if (hasDeepSeekKey) dsById[id]?.let { ordered.add(it) }
+            }
+
+            when (modelTier) {
+                AiModelTier.DEEPSEEK_V3_FREE -> {
+                    addOr("deepseek/deepseek-chat-v3-0324:free")
+                    addDs("deepseek-chat")
+                    addOr("deepseek/deepseek-r1-0528:free")
+                    addOr("tngtech/deepseek-r1t2-chimera:free")
+                    addDs("deepseek-reasoner")
+                    addOr("deepseek/deepseek-r1:free")
+                    addOr("openrouter/free")
+                }
+                AiModelTier.DEEPSEEK_CHIMERA_FREE -> {
+                    addOr("tngtech/deepseek-r1t2-chimera:free")
+                    addOr("deepseek/deepseek-r1-0528:free")
+                    addOr("deepseek/deepseek-chat-v3-0324:free")
+                    addDs("deepseek-reasoner")
+                    addDs("deepseek-chat")
+                    addOr("deepseek/deepseek-r1:free")
+                    addOr("openrouter/free")
+                }
+                else -> {
+                    addOr("deepseek/deepseek-r1-0528:free")
+                    addDs("deepseek-reasoner")
+                    addOr("deepseek/deepseek-r1:free")
+                    addOr("tngtech/deepseek-r1t2-chimera:free")
+                    addOr("deepseek/deepseek-chat-v3-0324:free")
+                    addDs("deepseek-chat")
+                    addOr("openrouter/free")
+                }
+            }
+            return ordered.distinctBy { it.provider to it.modelId }
+        }
+
+        fun buildCrossProviderFallbackChain(
+            requestedTier: AiModelTier,
+            effectiveTier: AiModelTier,
+            capabilityMode: CapabilityMode,
+            hasImageAttachment: Boolean,
+            requiresGeminiTools: Boolean,
+            preferFastGroq: Boolean,
+            hasGeminiKey: Boolean,
+            hasOpenRouterKey: Boolean,
+            hasDeepSeekKey: Boolean,
+            hasGroqKey: Boolean
+        ): List<ModelCandidate> {
+            val geminiCandidates = if (hasGeminiKey) {
+                val orderedIds = resolveGeminiCandidateModels(effectiveTier)
+                val byId = ALL_FREE_GEMINI_CANDIDATES.associateBy { it.modelId }
+                orderedIds.mapNotNull { byId[it] }
+            } else emptyList()
+
+            val deepSeekCandidates = if (!hasImageAttachment && (hasOpenRouterKey || hasDeepSeekKey)) {
+                resolveDeepSeekCandidates(effectiveTier, hasOpenRouterKey, hasDeepSeekKey)
+            } else emptyList()
+
+            val groqCandidates = if (hasGroqKey) {
+                val effectiveGroqCap = if (capabilityMode == CapabilityMode.STANDARD && requestedTier.isDeepSeekTier) {
+                    CapabilityMode.DEEP_THINK
+                } else {
+                    capabilityMode
+                }
+                selectGroqFallbackModels(
+                    capabilityMode = effectiveGroqCap,
+                    modelTier = effectiveTier,
+                    hasImageAttachment = hasImageAttachment
+                ).map { id ->
+                    ModelCandidate(
+                        provider = ModelProvider.GROQ,
+                        modelId = id,
+                        displayName = groqFriendlyName(id),
+                        supportsVision = id.contains("llama-4-scout")
+                    )
+                }
+            } else emptyList()
+
+            val combined = when {
+                requestedTier.isDeepSeekTier -> {
+                    deepSeekCandidates + groqCandidates + geminiCandidates
+                }
+                requestedTier != AiModelTier.AUTO_ROUTER -> {
+                    geminiCandidates + deepSeekCandidates + groqCandidates
+                }
+                hasGroqKey && !requiresGeminiTools && (preferFastGroq || effectiveTier == AiModelTier.GEMINI_3_5_FLASH_LITE) -> {
+                    groqCandidates + geminiCandidates + deepSeekCandidates
+                }
+                else -> {
+                    geminiCandidates + deepSeekCandidates + groqCandidates
+                }
+            }
+
+            return combined.distinctBy { it.provider to it.modelId }
+        }
+
+        private fun groqFriendlyName(modelId: String): String = when {
+            modelId.contains("gpt-oss-120b") -> "Groq GPT-OSS 120B"
+            modelId.contains("gpt-oss-20b") -> "Groq GPT-OSS 20B"
+            modelId.contains("llama-3.3-70b") -> "Groq Llama 3.3 70B"
+            modelId.contains("llama-3.1-8b") -> "Groq Llama 3.1 8B"
+            modelId.contains("llama-4-scout") -> "Groq Llama 4 Scout Vision"
+            else -> "Groq Fast AI"
         }
 
         fun hasFreshWebCue(prompt: String): Boolean {
@@ -1835,7 +2392,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             }
 
             val lower = request.prompt.lowercase()
-            val hasCodeCue = Regex("\\b(kotlin|compose|python|java|typescript|react|sql|bug|debug|crash|refactor|architect|coroutine|room|gradle|api|diff|function|class)\\b")
+            val hasCodeCue = Regex("\\b(kotlin|compose|android|jetpack|python|java|typescript|javascript|react|nextjs|node|rust|golang|cpp|c\\+\\+|html|css|tailwind|sql|bug|debug|crash|exception|stacktrace|nullpointer|refactor|architect|coroutine|stateflow|room|hilt|retrofit|ktor|gradle|api|diff|function|class|algorithm|dsa|leetcode|shader|docker|regex|unittest|junit|compile|code)\\b")
                 .containsMatchIn(lower)
             val hasMathCue = Regex("(\\\\int|\\\\frac|\\\\sum|integral|derivative|theorem|prove|olympiad|jee|matrix|eigen|calculus|probability|equation)")
                 .containsMatchIn(lower)
@@ -1845,7 +2402,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
             return when {
                 hasCodeCue -> AutoRouteDecision(
-                    resolvedModel = AiModelTier.GEMINI_4_ARGON,
+                    resolvedModel = AiModelTier.GEMINI_3_8_FLASH,
                     resolvedCapability = CapabilityMode.CODE_ARCHITECT,
                     useWebSearch = request.useWebSearch || hasFreshWebCue,
                     routeLabel = "Auto · Code Studio"
@@ -1895,7 +2452,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 capabilityMode == CapabilityMode.DEEP_THINK ||
                     capabilityMode == CapabilityMode.CODE_ARCHITECT ||
                     capabilityMode == CapabilityMode.DEEP_RESEARCH ||
-                    modelTier == AiModelTier.GEMINI_4_ARGON -> listOf(
+                    modelTier == AiModelTier.GEMINI_4_ARGON ||
+                    modelTier.isDeepSeekTier -> listOf(
                     "openai/gpt-oss-120b",
                     "openai/gpt-oss-20b",
                     "llama-3.3-70b-versatile",
@@ -1929,16 +2487,26 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 msg.contains("resource_exhausted") ||
                 msg.contains("billing") ||
                 msg.contains("blaze") ||
+                msg.contains("balance") ||
+                msg.contains("401") ||
+                msg.contains("402") ||
+                msg.contains("403") ||
+                msg.contains("unauthorized") ||
+                msg.contains("permission") ||
                 msg.contains("not found") ||
+                msg.contains("decommissioned") ||
                 msg.contains("404") ||
                 msg.contains("400") ||
                 msg.contains("invalid_argument") ||
                 msg.contains("unsupported") ||
+                msg.contains("empty response") ||
                 msg.contains("limit:") ||
                 msg.contains("tool") ||
                 msg.contains("grounding") ||
                 msg.contains("eof") ||
                 msg.contains("reset") ||
+                msg.contains("connect") ||
+                msg.contains("unable to resolve") ||
                 msg.contains("timeout")
         }
     }

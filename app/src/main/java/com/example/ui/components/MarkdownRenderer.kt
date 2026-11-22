@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -81,6 +82,7 @@ private sealed interface MdBlock {
 @Composable
 fun MarkdownRenderer(
     markdown: String,
+    isStreaming: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
@@ -90,7 +92,8 @@ fun MarkdownRenderer(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            blocks.forEach { block ->
+            blocks.forEachIndexed { index, block ->
+                val isTailStreamingBlock = isStreaming && index == blocks.lastIndex
                 when (block) {
                     is MdBlock.Heading -> {
                         val style = when (block.level) {
@@ -187,7 +190,11 @@ fun MarkdownRenderer(
                         if (block.language.equals("sandbox-output", ignoreCase = true)) {
                             SandboxOutputCard(output = block.code)
                         } else {
-                            CodeBlockCard(language = block.language, code = block.code)
+                            CodeBlockCard(
+                                language = block.language,
+                                code = block.code,
+                                isLiveStreaming = isTailStreamingBlock
+                            )
                         }
                     }
 
@@ -361,7 +368,8 @@ private fun SandboxOutputCard(output: String) {
 @Composable
 private fun CodeBlockCard(
     language: String,
-    code: String
+    code: String,
+    isLiveStreaming: Boolean = false
 ) {
     val auraColors = LocalAuraColors.current
     val clipboard = LocalClipboardManager.current
@@ -369,7 +377,18 @@ private fun CodeBlockCard(
     var copied by remember { mutableStateOf(false) }
     var showFullScreen by remember { mutableStateOf(false) }
     var showArtifactPreview by remember { mutableStateOf(false) }
-    val canPreview = remember(language) { isPreviewableArtifactLanguage(language) }
+
+    val (cleanLang, fileBadge) = remember(language, code) {
+        val rawLang = language.trim()
+        val colonIdx = rawLang.indexOf(':')
+        val parsedLang = if (colonIdx > 0) rawLang.substring(0, colonIdx).trim() else rawLang
+        val headerFile = if (colonIdx > 0) rawLang.substring(colonIdx + 1).trim().takeIf { it.isNotBlank() } else null
+        val firstLine = code.lineSequence().firstOrNull()?.trim().orEmpty()
+        val commentFile = Regex("^(?://|#|--|/\\*)\\s*File:\\s*([^\\s*]+)", RegexOption.IGNORE_CASE)
+            .find(firstLine)?.groupValues?.getOrNull(1)?.trim()
+        parsedLang.ifBlank { "code" }.lowercase() to (headerFile ?: commentFile)
+    }
+    val canPreview = remember(cleanLang) { isPreviewableArtifactLanguage(cleanLang) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -378,8 +397,8 @@ private fun CodeBlockCard(
         }
     }
 
-    val highlightedCode = remember(code, language, auraColors.codeText) {
-        if (language.equals("diff", ignoreCase = true)) {
+    val highlightedCode = remember(code, cleanLang, auraColors.codeText) {
+        if (cleanLang.equals("diff", ignoreCase = true)) {
             highlightDiffSyntax(
                 code = code,
                 baseColor = auraColors.codeText,
@@ -407,7 +426,12 @@ private fun CodeBlockCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(auraColors.codeBackground)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .border(
+                1.dp,
+                if (isLiveStreaming) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(14.dp)
+            )
     ) {
         Row(
             modifier = Modifier
@@ -417,11 +441,26 @@ private fun CodeBlockCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "${language.ifBlank { "code" }.lowercase()} · $lineCount lines",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
+                if (isLiveStreaming) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(auraColors.emerald)
+                    )
+                }
+                Text(
+                    text = if (fileBadge != null) "$fileBadge · $cleanLang · $lineCount L" else "$cleanLang · $lineCount lines",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    maxLines = 1
+                )
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)

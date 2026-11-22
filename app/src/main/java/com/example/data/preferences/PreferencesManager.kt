@@ -33,6 +33,8 @@ class PreferencesManager(private val context: Context) {
         val USER_API_KEY = stringPreferencesKey("user_api_key")
         val USER_GROQ_API_KEY = stringPreferencesKey("user_groq_api_key")
         val USER_EXA_API_KEY = stringPreferencesKey("user_exa_api_key")
+        val USER_OPENROUTER_API_KEY = stringPreferencesKey("user_openrouter_api_key")
+        val USER_DEEPSEEK_API_KEY = stringPreferencesKey("user_deepseek_api_key")
         val PREFER_FAST_GROQ = booleanPreferencesKey("prefer_fast_groq")
         val VAULT_RAG_ENABLED = booleanPreferencesKey("vault_rag_enabled")
     }
@@ -90,6 +92,14 @@ class PreferencesManager(private val context: Context) {
         prefs[Keys.USER_EXA_API_KEY]?.trim().orEmpty()
     }
 
+    val userOpenRouterApiKey: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.USER_OPENROUTER_API_KEY]?.trim().orEmpty()
+    }
+
+    val userDeepSeekApiKey: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.USER_DEEPSEEK_API_KEY]?.trim().orEmpty()
+    }
+
     val preferFastGroq: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
         prefs[Keys.PREFER_FAST_GROQ] ?: true
     }
@@ -110,6 +120,18 @@ class PreferencesManager(private val context: Context) {
         val saved = userExaApiKey.first()
         if (saved.isNotBlank()) return saved
         return resolveBuildConfigExaApiKey()
+    }
+
+    suspend fun getEffectiveOpenRouterApiKey(): String {
+        val saved = userOpenRouterApiKey.first()
+        if (saved.isNotBlank()) return saved
+        return resolveBuildConfigOpenRouterApiKey()
+    }
+
+    suspend fun getEffectiveDeepSeekApiKey(): String {
+        val saved = userDeepSeekApiKey.first()
+        if (saved.isNotBlank()) return saved
+        return resolveBuildConfigDeepSeekApiKey()
     }
 
     suspend fun setUserApiKey(apiKey: String) {
@@ -141,6 +163,28 @@ class PreferencesManager(private val context: Context) {
                 prefs.remove(Keys.USER_EXA_API_KEY)
             } else {
                 prefs[Keys.USER_EXA_API_KEY] = cleaned
+            }
+        }
+    }
+
+    suspend fun setUserOpenRouterApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        context.auraDataStore.edit { prefs ->
+            if (cleaned.isEmpty()) {
+                prefs.remove(Keys.USER_OPENROUTER_API_KEY)
+            } else {
+                prefs[Keys.USER_OPENROUTER_API_KEY] = cleaned
+            }
+        }
+    }
+
+    suspend fun setUserDeepSeekApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        context.auraDataStore.edit { prefs ->
+            if (cleaned.isEmpty()) {
+                prefs.remove(Keys.USER_DEEPSEEK_API_KEY)
+            } else {
+                prefs[Keys.USER_DEEPSEEK_API_KEY] = cleaned
             }
         }
     }
@@ -206,6 +250,22 @@ class PreferencesManager(private val context: Context) {
             val builtIn = BuildConfig.EXA_API_KEY.trim()
             return if (builtIn.isBlank() ||
                 builtIn == "YOUR_EXA_API_KEY" ||
+                builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
+            ) "" else builtIn
+        }
+
+        fun resolveBuildConfigOpenRouterApiKey(): String {
+            val builtIn = BuildConfig.OPENROUTER_API_KEY.trim()
+            return if (builtIn.isBlank() ||
+                builtIn == "YOUR_OPENROUTER_API_KEY" ||
+                builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
+            ) "" else builtIn
+        }
+
+        fun resolveBuildConfigDeepSeekApiKey(): String {
+            val builtIn = BuildConfig.DEEPSEEK_API_KEY.trim()
+            return if (builtIn.isBlank() ||
+                builtIn == "YOUR_DEEPSEEK_API_KEY" ||
                 builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
             ) "" else builtIn
         }

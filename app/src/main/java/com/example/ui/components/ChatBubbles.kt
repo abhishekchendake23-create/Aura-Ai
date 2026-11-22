@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import android.net.Uri
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -22,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
@@ -190,7 +190,8 @@ fun AssistantMessageBlock(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        AssistantHeaderRow(modelName = message.modelDisplayName, isStreaming = false)
+        val headerTitle = if (!message.generatedImagePath.isNullOrBlank()) "Aura Imagine" else "Aura AI"
+        AssistantHeaderRow(modelName = headerTitle, isStreaming = false)
 
         if (message.isError) {
             Surface(
@@ -228,12 +229,18 @@ fun AssistantMessageBlock(
                         message.content
                             .replace(Regex("https?://\\S+"), "")
                             .replace(Regex("gemini[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("gemma[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("deepseek[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("openrouter[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
                             .replace(Regex("groq[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("exa\\s*api|exa\\.ai|\\bexa\\b", RegexOption.IGNORE_CASE), "Aura Search")
                             .replace(Regex("(meta-)?llama[-a-z0-9./]*", RegexOption.IGNORE_CASE), "Aura AI")
                             .replace(Regex("(openai/)?gpt-oss[-a-z0-9.]*", RegexOption.IGNORE_CASE), "Aura AI")
+                            .replace(Regex("(qwen|mistral|tngtech|anthropic|claude)[-a-z0-9./:]*", RegexOption.IGNORE_CASE), "Aura AI")
                             .replace(Regex("openai", RegexOption.IGNORE_CASE), "Abhynex")
                             .replace(Regex("generativelanguage\\.googleapis\\.com\\S*", RegexOption.IGNORE_CASE), "")
-                            .replace(Regex("api\\.groq\\.com\\S*", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("api\\.(groq|deepseek|exa)\\.\\S*", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("openrouter\\.ai\\S*", RegexOption.IGNORE_CASE), "")
                             .replace(Regex("google", RegexOption.IGNORE_CASE), "Abhynex")
                             .replace(Regex("\\s+"), " ")
                             .trim()
@@ -549,7 +556,8 @@ fun StreamingAssistantBlock(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        AssistantHeaderRow(modelName = streaming.modelDisplayName, isStreaming = true)
+        val streamHeaderName = if (streaming.isGeneratingImage) "Aura Imagine" else "Aura AI"
+        AssistantHeaderRow(modelName = streamHeaderName, isStreaming = true)
 
         if (streaming.isGeneratingImage) {
             Box(
@@ -587,24 +595,53 @@ fun StreamingAssistantBlock(
 
         if (streaming.thinkingText.isNotBlank() || streaming.isThinkingPhase) {
             ThinkingAccordion(
-                thinkingText = streaming.thinkingText.ifBlank { "Thinking step by step..." },
+                thinkingText = streaming.thinkingText.ifBlank { "Thinking step by step…" },
                 durationMs = streaming.thinkingDurationMs,
                 isActiveThinking = streaming.isThinkingPhase
             )
         }
 
-        AnimatedVisibility(visible = streaming.contentText.isNotBlank()) {
-            MarkdownRenderer(markdown = streaming.contentText)
-        }
-
-        if (streaming.contentText.isBlank() && !streaming.isThinkingPhase) {
+        if (streaming.contentText.isNotBlank()) {
+            MarkdownRenderer(
+                markdown = streaming.contentText,
+                isStreaming = true
+            )
+            val isWritingCode = remember(streaming.contentText) {
+                streaming.contentText.split("```").size % 2 == 0
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .alpha(pulseAlpha)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+                Text(
+                    text = if (isWritingCode) "Writing code…" else "Streaming live…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (!streaming.isThinkingPhase) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.alpha(pulseAlpha)
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
                 Text(
-                    text = "Aura AI is thinking…",
+                    text = "Aura AI is responding…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

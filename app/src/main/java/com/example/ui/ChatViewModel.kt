@@ -64,6 +64,7 @@ data class StreamingMessageState(
     val thinkingDurationMs: Long,
     val contentText: String,
     val modelDisplayName: String,
+    val activeSwitchNote: String? = null,
     val isThinkingPhase: Boolean,
     val isGeneratingImage: Boolean = false
 )
@@ -197,6 +198,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = ""
     )
 
+    val savedOpenRouterApiKey: StateFlow<String> = prefs.userOpenRouterApiKey.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ""
+    )
+
+    val savedDeepSeekApiKey: StateFlow<String> = prefs.userDeepSeekApiKey.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ""
+    )
+
     val preferFastGroq: StateFlow<Boolean> = prefs.preferFastGroq.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -227,19 +240,51 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = PreferencesManager.resolveBuildConfigExaApiKey().isNotBlank()
         )
 
+    val hasEffectiveOpenRouterApiKey: StateFlow<Boolean> = prefs.userOpenRouterApiKey
+        .let { orFlow ->
+            combine(orFlow) { values ->
+                values[0].isNotBlank() || PreferencesManager.resolveBuildConfigOpenRouterApiKey().isNotBlank()
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = PreferencesManager.resolveBuildConfigOpenRouterApiKey().isNotBlank()
+        )
+
+    val hasEffectiveDeepSeekApiKey: StateFlow<Boolean> = prefs.userDeepSeekApiKey
+        .let { dsFlow ->
+            combine(dsFlow) { values ->
+                values[0].isNotBlank() || PreferencesManager.resolveBuildConfigDeepSeekApiKey().isNotBlank()
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = PreferencesManager.resolveBuildConfigDeepSeekApiKey().isNotBlank()
+        )
+
     val hasEffectiveApiKey: StateFlow<Boolean> = combine(
         prefs.userApiKey,
-        prefs.userGroqApiKey
-    ) { geminiSaved, groqSaved ->
+        prefs.userGroqApiKey,
+        prefs.userOpenRouterApiKey,
+        prefs.userDeepSeekApiKey
+    ) { geminiSaved, groqSaved, orSaved, dsSaved ->
         geminiSaved.isNotBlank() ||
             PreferencesManager.resolveBuildConfigApiKey().isNotBlank() ||
             groqSaved.isNotBlank() ||
-            PreferencesManager.resolveBuildConfigGroqApiKey().isNotBlank()
+            PreferencesManager.resolveBuildConfigGroqApiKey().isNotBlank() ||
+            orSaved.isNotBlank() ||
+            PreferencesManager.resolveBuildConfigOpenRouterApiKey().isNotBlank() ||
+            dsSaved.isNotBlank() ||
+            PreferencesManager.resolveBuildConfigDeepSeekApiKey().isNotBlank()
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = PreferencesManager.resolveBuildConfigApiKey().isNotBlank() ||
-            PreferencesManager.resolveBuildConfigGroqApiKey().isNotBlank()
+            PreferencesManager.resolveBuildConfigGroqApiKey().isNotBlank() ||
+            PreferencesManager.resolveBuildConfigOpenRouterApiKey().isNotBlank() ||
+            PreferencesManager.resolveBuildConfigDeepSeekApiKey().isNotBlank()
     )
 
     val personas: StateFlow<List<PersonaEntity>> = chatRepository.observePersonas().stateIn(
@@ -481,6 +526,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 "Fast Speed Priority ON (Groq first, cloud fallback)"
             } else {
                 "Fast Speed Priority OFF (Groq fallback still active)"
+            }
+        }
+    }
+
+    fun saveOpenRouterApiKey(apiKey: String) {
+        viewModelScope.launch {
+            prefs.setUserOpenRouterApiKey(apiKey)
+            val cleaned = apiKey.trim()
+            _bannerMessage.value = if (cleaned.isNotEmpty()) {
+                "OpenRouter Free Key saved (DeepSeek R1 & V3 ready)"
+            } else {
+                "Saved OpenRouter Key removed"
+            }
+        }
+    }
+
+    fun saveDeepSeekApiKey(apiKey: String) {
+        viewModelScope.launch {
+            prefs.setUserDeepSeekApiKey(apiKey)
+            val cleaned = apiKey.trim()
+            _bannerMessage.value = if (cleaned.isNotEmpty()) {
+                "DeepSeek API Key saved"
+            } else {
+                "Saved DeepSeek Key removed"
             }
         }
     }
@@ -803,16 +872,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         attachment: AttachmentDraft?
     ) {
         val assistantMsgId = UUID.randomUUID().toString()
+        val auraHeaderLabel = if (model.isImageModel) "Aura Imagine" else "Aura AI"
         _streamingState.value = StreamingMessageState(
             messageId = assistantMsgId,
             conversationId = conversationId,
             thinkingText = "",
             thinkingDurationMs = 0L,
             contentText = "",
-            modelDisplayName = "Aura AI",
+            modelDisplayName = auraHeaderLabel,
+            activeSwitchNote = null,
             isThinkingPhase = !model.isImageModel && (
-                capability == CapabilityMode.DEEP_THINK || capability == CapabilityMode.CODE_ARCHITECT
-            ),
+                capability == CapabilityMode.DEEP_THINK ||
+                    capability == CapabilityMode.CODE_ARCHITECT ||
+                    model.isDeepSeekTier
+                ),
             isGeneratingImage = model.isImageModel
         )
 
@@ -849,6 +922,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             aiRepository.streamResponse(request).collect { event ->
                 val current = _streamingState.value ?: return@collect
                 when (event) {
+                    is AiStreamEvent.ModelActivated -> {
+                        if (event.switchedFromModel != null) {
+                            _streamingState.value = current.copy(
+                                modelDisplayName = auraHeaderLabel,
+                                activeSwitchNote = null,
+                                contentText = ""
+                            )
+                        }
+                    }
                     is AiStreamEvent.ThinkingChunk -> {
                         _streamingState.value = current.copy(
                             thinkingText = event.thinkingText,
@@ -863,6 +945,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     is AiStreamEvent.Completed -> {
+                        val finalHeader = if (event.generatedImagePath != null) "Aura Imagine" else auraHeaderLabel
                         val saved = MessageEntity(
                             id = assistantMsgId,
                             conversationId = conversationId,
@@ -870,7 +953,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             content = event.fullText,
                             thinkingContent = event.thinkingText,
                             thinkingDurationMs = event.thinkingDurationMs,
-                            modelDisplayName = "Aura AI",
+                            modelDisplayName = finalHeader,
                             generatedImagePath = event.generatedImagePath,
                             sourcesJson = serializeSources(event.sources),
                             isError = false,
@@ -885,7 +968,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             conversationId = conversationId,
                             role = "assistant",
                             content = event.errorMessage,
-                            modelDisplayName = "Aura AI",
+                            modelDisplayName = auraHeaderLabel,
                             isError = true,
                             timestamp = System.currentTimeMillis()
                         )
@@ -929,7 +1012,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         content = current.contentText + "\n\n_(Generation stopped)_",
                         thinkingContent = current.thinkingText.ifBlank { null },
                         thinkingDurationMs = current.thinkingDurationMs,
-                        modelDisplayName = current.modelDisplayName,
+                        modelDisplayName = "Aura AI",
                         isError = false,
                         timestamp = System.currentTimeMillis()
                     )

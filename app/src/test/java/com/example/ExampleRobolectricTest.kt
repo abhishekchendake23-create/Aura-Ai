@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -395,23 +396,58 @@ class ExampleRobolectricTest {
         )
         assertTrue(marathiWebDecision.useWebSearch)
 
-        val coreCandidates = com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
+        val flash38Candidates = com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
             com.example.data.model.AiModelTier.GEMINI_3_8_FLASH
         )
-        assertEquals("gemini-2.5-flash", coreCandidates.first())
-        assertTrue(coreCandidates.all { it.startsWith("gemini-2.5-") })
+        assertEquals("gemini-3.8-flash", flash38Candidates.first())
+        assertEquals(
+            "gemini-3.7-flash",
+            com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
+                com.example.data.model.AiModelTier.GEMINI_3_7_FLASH
+            ).first()
+        )
+        assertEquals(
+            "gemini-3.6-flash",
+            com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
+                com.example.data.model.AiModelTier.GEMINI_3_6_FLASH
+            ).first()
+        )
+        assertEquals(
+            "gemini-3.5-flash",
+            com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
+                com.example.data.model.AiModelTier.GEMINI_3_5_FLASH
+            ).first()
+        )
+        assertEquals(
+            "gemini-2.5-flash",
+            com.example.data.repository.DirectGeminiAiRepository.resolveGeminiCandidateModels(
+                com.example.data.model.AiModelTier.GEMINI_2_5_FLASH
+            ).first()
+        )
+        assertTrue(flash38Candidates.contains("gemini-3.7-flash"))
+        assertTrue(flash38Candidates.contains("gemini-3.6-flash"))
+        assertTrue(flash38Candidates.contains("gemini-3.5-flash"))
+        assertTrue(flash38Candidates.contains("gemini-3.5-flash-lite"))
+        assertTrue(flash38Candidates.contains("gemini-2.5-flash"))
+        assertTrue(flash38Candidates.contains("gemini-2.5-pro"))
+        assertTrue(flash38Candidates.contains("gemini-2.5-flash-lite"))
+        assertTrue(flash38Candidates.contains("gemini-2.0-flash"))
+        assertTrue(flash38Candidates.contains("gemma-3-27b-it"))
+        assertTrue(flash38Candidates.contains("gemma-3-12b-it"))
 
         val context = ApplicationProvider.getApplicationContext<Context>()
         val aiRepo = com.example.data.repository.DirectGeminiAiRepository(context)
         val systemInstruction = aiRepo.buildSystemInstruction(
             persona = null,
-            capabilityMode = com.example.data.model.CapabilityMode.STANDARD,
+            capabilityMode = com.example.data.model.CapabilityMode.CODE_ARCHITECT,
             language = com.example.data.model.AppLanguage.AUTO,
             useWebSearch = true,
             useCodeExecution = false
         )
         assertTrue(systemInstruction.contains("Current Date & Time:"))
         assertTrue(systemInstruction.contains("Live Web Search Grounding & URL Context ON"))
+        assertTrue(systemInstruction.contains("Principal Software Engineer Coding Standard"))
+        assertTrue(systemInstruction.contains("STRICT CONFIDENTIALITY RULE"))
     }
 
     @Test
@@ -446,5 +482,83 @@ class ExampleRobolectricTest {
 
         prefs.setUserExaApiKey("")
         assertEquals("", prefs.userExaApiKey.first())
+    }
+
+    @Test
+    fun `deepseek free models, SSE streaming reasoning parser, and cross-provider auto failover work end to end`() = runTest {
+        // 1. DeepSeek free model order starts with latest free models
+        val r1Candidates = com.example.data.repository.DirectGeminiAiRepository.resolveDeepSeekCandidates(
+            modelTier = com.example.data.model.AiModelTier.DEEPSEEK_R1_FREE,
+            hasOpenRouterKey = true,
+            hasDeepSeekKey = false
+        )
+        assertEquals("deepseek/deepseek-r1-0528:free", r1Candidates.first().modelId)
+        assertTrue(r1Candidates.any { it.modelId == "deepseek/deepseek-chat-v3-0324:free" })
+        assertTrue(r1Candidates.any { it.modelId == "openrouter/free" })
+
+        val v3Candidates = com.example.data.repository.DirectGeminiAiRepository.resolveDeepSeekCandidates(
+            modelTier = com.example.data.model.AiModelTier.DEEPSEEK_V3_FREE,
+            hasOpenRouterKey = true,
+            hasDeepSeekKey = true
+        )
+        assertEquals("deepseek/deepseek-chat-v3-0324:free", v3Candidates.first().modelId)
+        assertTrue(v3Candidates.any { it.provider == com.example.data.repository.ModelProvider.DEEPSEEK })
+
+        // 2. Cross-provider auto-failover includes DeepSeek -> Groq -> all free Gemini models
+        val deepSeekChain = com.example.data.repository.DirectGeminiAiRepository.buildCrossProviderFallbackChain(
+            requestedTier = com.example.data.model.AiModelTier.DEEPSEEK_R1_FREE,
+            effectiveTier = com.example.data.model.AiModelTier.DEEPSEEK_R1_FREE,
+            capabilityMode = com.example.data.model.CapabilityMode.DEEP_THINK,
+            hasImageAttachment = false,
+            requiresGeminiTools = false,
+            preferFastGroq = true,
+            hasGeminiKey = true,
+            hasOpenRouterKey = true,
+            hasDeepSeekKey = false,
+            hasGroqKey = true
+        )
+        assertEquals("deepseek/deepseek-r1-0528:free", deepSeekChain.first().modelId)
+        assertTrue(deepSeekChain.any { it.provider == com.example.data.repository.ModelProvider.GROQ })
+        assertTrue(deepSeekChain.any { it.provider == com.example.data.repository.ModelProvider.GEMINI && it.modelId == "gemini-2.5-flash" })
+        assertTrue(deepSeekChain.any { it.modelId == "gemma-3-27b-it" })
+
+        // 3. Explicit Gemini 2.0 Flash stays primary then falls back across Gemini -> DeepSeek -> Groq
+        val gemini2Chain = com.example.data.repository.DirectGeminiAiRepository.buildCrossProviderFallbackChain(
+            requestedTier = com.example.data.model.AiModelTier.GEMINI_2_0_FLASH,
+            effectiveTier = com.example.data.model.AiModelTier.GEMINI_2_0_FLASH,
+            capabilityMode = com.example.data.model.CapabilityMode.STANDARD,
+            hasImageAttachment = false,
+            requiresGeminiTools = false,
+            preferFastGroq = true,
+            hasGeminiKey = true,
+            hasOpenRouterKey = true,
+            hasDeepSeekKey = false,
+            hasGroqKey = true
+        )
+        assertEquals("gemini-2.0-flash", gemini2Chain.first().modelId)
+        assertFalse(gemini2Chain.first().supportsThinkingConfig)
+        assertTrue(gemini2Chain.any { it.modelId == "deepseek/deepseek-r1-0528:free" })
+
+        // 4. OpenAI-compat SSE parser handles reasoning_content, null values, and inline stream errors
+        val nullReasoningJson = org.json.JSONObject("""{"choices":[{"delta":{"reasoning":null,"reasoning_content":"Step 1","content":"Hello"}}]}""")
+        val delta = com.example.data.repository.DirectGeminiAiRepository.parseOpenAiCompatSseChunk(nullReasoningJson)
+        assertEquals("Step 1", delta?.reasoningDelta)
+        assertEquals("Hello", delta?.contentDelta)
+        assertEquals(null, delta?.errorMessage)
+
+        val inlineErrorJson = org.json.JSONObject("""{"error":{"code":429,"message":"Rate limit exceeded"}}""")
+        val errDelta = com.example.data.repository.DirectGeminiAiRepository.parseOpenAiCompatSseChunk(inlineErrorJson)
+        assertTrue(errDelta?.errorMessage?.contains("429") == true)
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isTransientOrRecoverableErrorMessage(errDelta!!.errorMessage!!))
+
+        // 5. Preferences persist OpenRouter & DeepSeek keys cleanly
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.preferences.PreferencesManager(context)
+        prefs.setUserOpenRouterApiKey("  sk-or-v1-test  ")
+        prefs.setUserDeepSeekApiKey("  sk-ds-test  ")
+        assertEquals("sk-or-v1-test", prefs.getEffectiveOpenRouterApiKey())
+        assertEquals("sk-ds-test", prefs.getEffectiveDeepSeekApiKey())
+        prefs.setUserOpenRouterApiKey("")
+        prefs.setUserDeepSeekApiKey("")
     }
 }

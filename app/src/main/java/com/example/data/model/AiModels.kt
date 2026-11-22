@@ -49,7 +49,9 @@ enum class AppLanguage(
 }
 
 enum class ModelCategory(val title: String) {
-    CHAT_AND_VISION("Aura Intelligence Modes"),
+    SMART_AUTO("Smart Auto · Auto-Failover"),
+    GEMINI_FREE("Gemini Flash Series (3.8–2.0) & Free Models"),
+    DEEPSEEK_FREE("Latest Free DeepSeek Models"),
     IMAGE_GENERATION("Aura Imagine · Visual Creation")
 }
 
@@ -67,45 +69,144 @@ enum class AiModelTier(
         id = "aura-auto-router",
         displayName = "Aura Auto Router",
         shortName = "Auto Smart",
-        subtitle = "Automatically routes quick chats to ultra-fast and hard tasks to deep reasoning",
+        subtitle = "Smart-routes every prompt and automatically fails over across all Gemini Flash, DeepSeek & Groq models",
         badge = "AUTO",
-        contextLabel = "Abhynex",
-        category = ModelCategory.CHAT_AND_VISION
+        contextLabel = "FAILOVER",
+        category = ModelCategory.SMART_AUTO
     ),
     GEMINI_3_8_FLASH(
         id = "gemini-3.8-flash",
-        displayName = "Aura Core",
-        shortName = "Aura AI",
-        subtitle = "Flagship everyday intelligence for chat, code & vision",
-        badge = "CORE",
-        contextLabel = "Abhynex",
-        category = ModelCategory.CHAT_AND_VISION
+        displayName = "Gemini 3.8 Flash",
+        shortName = "3.8 Flash",
+        subtitle = "Flagship 3.8 Flash — elite Claude-tier software engineering, deep thinking & vision",
+        badge = "3.8 FLASH",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
     ),
-    GEMINI_4_ARGON(
-        id = "gemini-4-argon",
-        displayName = "Aura Deep",
-        shortName = "Aura Deep",
-        subtitle = "Deep reasoning, architecture, math & complex problem solving",
-        badge = "PRO",
-        contextLabel = "Abhynex",
-        category = ModelCategory.CHAT_AND_VISION
+    GEMINI_3_7_FLASH(
+        id = "gemini-3.7-flash",
+        displayName = "Gemini 3.7 Flash",
+        shortName = "3.7 Flash",
+        subtitle = "High-intelligence 3.7 Flash for complex coding, reasoning & multimodal analysis",
+        badge = "3.7 FLASH",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_3_6_FLASH(
+        id = "gemini-3.6-flash",
+        displayName = "Gemini 3.6 Flash",
+        shortName = "3.6 Flash",
+        subtitle = "Balanced 3.6 Flash built for crisp architecture, debugging & fast chat",
+        badge = "3.6 FLASH",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_3_5_FLASH(
+        id = "gemini-3.5-flash",
+        displayName = "Gemini 3.5 Flash",
+        shortName = "3.5 Flash",
+        subtitle = "Versatile 3.5 Flash workhorse for code generation, math & web research",
+        badge = "3.5 FLASH",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
     ),
     GEMINI_3_5_FLASH_LITE(
         id = "gemini-3.5-flash-lite",
-        displayName = "Aura Swift",
-        shortName = "Aura Swift",
-        subtitle = "Ultra-fast, instant replies for quick summaries & edits",
-        badge = "FAST",
-        contextLabel = "Abhynex",
-        category = ModelCategory.CHAT_AND_VISION
+        displayName = "Gemini 3.5 Flash-Lite",
+        shortName = "3.5 Lite",
+        subtitle = "Ultra-fast, low-latency 3.5 Flash-Lite for instant coding & summaries",
+        badge = "3.5 LITE",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_2_5_FLASH(
+        id = "gemini-2.5-flash",
+        displayName = "Gemini 2.5 Flash",
+        shortName = "2.5 Flash",
+        subtitle = "Free Gemini 2.5 Flash with hybrid thinking, code execution & Google Search",
+        badge = "FREE 2.5",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_4_ARGON(
+        id = "gemini-4-argon",
+        displayName = "Gemini 2.5 Pro",
+        shortName = "2.5 Pro",
+        subtitle = "Free top-tier deep reasoning, Olympiad math, code architecture & analysis",
+        badge = "FREE PRO",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_2_5_FLASH_LITE(
+        id = "gemini-2.5-flash-lite",
+        displayName = "Gemini 2.5 Flash-Lite",
+        shortName = "2.5 Lite",
+        subtitle = "Free high-RPM, low-latency 2.5 Flash-Lite for rapid replies & summaries",
+        badge = "FREE LITE",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMINI_2_0_FLASH(
+        id = "gemini-2.0-flash",
+        displayName = "Gemini 2.0 Flash",
+        shortName = "2.0 Flash",
+        subtitle = "Free high-speed multimodal 2.0 Flash with Google Search grounding",
+        badge = "FREE 2.0",
+        contextLabel = "1M CTX",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMMA_3_27B(
+        id = "gemma-3-27b-it",
+        displayName = "Gemma 3 27B",
+        shortName = "Gemma 3 27B",
+        subtitle = "Free Google open-weights 27B multimodal model on Gemini API",
+        badge = "FREE OPEN",
+        contextLabel = "128K",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    GEMMA_3_12B(
+        id = "gemma-3-12b-it",
+        displayName = "Gemma 3 12B",
+        shortName = "Gemma 3 12B",
+        subtitle = "Free lightweight open-weights model for fast chat & reasoning",
+        badge = "FREE OPEN",
+        contextLabel = "128K",
+        category = ModelCategory.GEMINI_FREE
+    ),
+    DEEPSEEK_R1_FREE(
+        id = "deepseek-r1-free",
+        displayName = "DeepSeek R1 (0528)",
+        shortName = "DeepSeek R1",
+        subtitle = "Latest free DeepSeek R1 reasoning model with live <think> streaming",
+        badge = "FREE R1",
+        contextLabel = "164K",
+        category = ModelCategory.DEEPSEEK_FREE
+    ),
+    DEEPSEEK_V3_FREE(
+        id = "deepseek-v3-free",
+        displayName = "DeepSeek V3 (0324)",
+        shortName = "DeepSeek V3",
+        subtitle = "Latest free DeepSeek V3 flagship chat, coding & multilingual MoE",
+        badge = "FREE V3",
+        contextLabel = "164K",
+        category = ModelCategory.DEEPSEEK_FREE
+    ),
+    DEEPSEEK_CHIMERA_FREE(
+        id = "deepseek-chimera-free",
+        displayName = "DeepSeek R1T2 Chimera",
+        shortName = "R1T2 Chimera",
+        subtitle = "Free hybrid R1/V3 reasoning & high-speed coding model",
+        badge = "FREE",
+        contextLabel = "164K",
+        category = ModelCategory.DEEPSEEK_FREE
     ),
     NANO_BANANA_2_1(
         id = "gemini-nano-banana-2.1",
-        displayName = "Aura Imagine",
-        shortName = "Aura Imagine",
+        displayName = "Gemini Flash Image",
+        shortName = "Flash Image",
         subtitle = "Create and transform high-quality images from text or photos",
         badge = "ART",
-        contextLabel = "Abhynex",
+        contextLabel = "GEMINI",
         category = ModelCategory.IMAGE_GENERATION,
         isImageModel = true
     ),
@@ -115,7 +216,7 @@ enum class AiModelTier(
         shortName = "Studio Art",
         subtitle = "Studio-grade visual synthesis & sharp poster typography",
         badge = "PRO ART",
-        contextLabel = "Abhynex",
+        contextLabel = "GEMINI",
         category = ModelCategory.IMAGE_GENERATION,
         isImageModel = true
     ),
@@ -125,14 +226,28 @@ enum class AiModelTier(
         shortName = "Rapid Art",
         subtitle = "Instant visual drafts, concept sketches & photo remixing",
         badge = "RAPID",
-        contextLabel = "Abhynex",
+        contextLabel = "GEMINI",
         category = ModelCategory.IMAGE_GENERATION,
         isImageModel = true
     );
 
+    val isDeepSeekTier: Boolean
+        get() = category == ModelCategory.DEEPSEEK_FREE
+
+    val isGeminiTier: Boolean
+        get() = category == ModelCategory.GEMINI_FREE
+
     companion object {
         fun fromId(id: String): AiModelTier =
-            entries.find { it.id == id } ?: GEMINI_3_8_FLASH
+            entries.find { it.id == id } ?: when (id) {
+                "gemini-2.5-flash" -> GEMINI_2_5_FLASH
+                "gemini-2.5-pro" -> GEMINI_4_ARGON
+                "gemini-2.5-flash-lite" -> GEMINI_2_5_FLASH_LITE
+                "deepseek/deepseek-r1-0528:free", "deepseek/deepseek-r1:free", "deepseek-reasoner" -> DEEPSEEK_R1_FREE
+                "deepseek/deepseek-chat-v3-0324:free", "deepseek-chat" -> DEEPSEEK_V3_FREE
+                "tngtech/deepseek-r1t2-chimera:free" -> DEEPSEEK_CHIMERA_FREE
+                else -> GEMINI_3_8_FLASH
+            }
     }
 }
 

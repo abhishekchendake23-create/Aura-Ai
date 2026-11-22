@@ -28,7 +28,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +39,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AiModelTier
 import com.example.data.model.ModelCategory
+import com.example.ui.theme.LocalAuraColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +48,8 @@ fun ModelSelectorSheet(
     onSelectModel: (AiModelTier) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val auraColors = LocalAuraColors.current
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
@@ -64,16 +69,29 @@ fun ModelSelectorSheet(
                 GeminiSparkleIcon(size = 24.dp)
                 Column {
                     Text(
-                        text = "Aura AI Modes",
+                        text = "Free AI Models · Streaming",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Powered by Abhynex",
+                        text = "Gemini Free Tier, DeepSeek Free & Auto-Failover",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = auraColors.emeraldContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "All models stream live with silent backend failover: if any engine hits a rate limit or fails, Aura automatically switches in the background without interrupting your chat.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = auraColors.emerald,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                )
             }
 
             ModelCategory.entries.forEach { category ->
@@ -88,17 +106,29 @@ fun ModelSelectorSheet(
                     val isSelected = tier == selectedModel
                     val icon = when (tier) {
                         AiModelTier.AUTO_ROUTER -> Icons.Rounded.AutoFixHigh
-                        AiModelTier.GEMINI_4_ARGON -> Icons.Rounded.Psychology
-                        AiModelTier.GEMINI_3_8_FLASH -> Icons.Rounded.AutoAwesome
-                        AiModelTier.GEMINI_3_5_FLASH_LITE -> Icons.Rounded.Bolt
+                        AiModelTier.GEMINI_4_ARGON,
+                        AiModelTier.DEEPSEEK_R1_FREE -> Icons.Rounded.Psychology
+                        AiModelTier.GEMINI_3_8_FLASH,
+                        AiModelTier.GEMINI_3_7_FLASH,
+                        AiModelTier.GEMINI_3_6_FLASH,
+                        AiModelTier.GEMINI_3_5_FLASH,
+                        AiModelTier.GEMINI_2_5_FLASH,
+                        AiModelTier.GEMINI_2_0_FLASH,
+                        AiModelTier.DEEPSEEK_V3_FREE,
+                        AiModelTier.DEEPSEEK_CHIMERA_FREE -> Icons.Rounded.AutoAwesome
+                        AiModelTier.GEMINI_3_5_FLASH_LITE,
+                        AiModelTier.GEMINI_2_5_FLASH_LITE,
+                        AiModelTier.GEMMA_3_27B,
+                        AiModelTier.GEMMA_3_12B,
+                        AiModelTier.GEMINI_3_1_FLASH_LITE_IMAGE -> Icons.Rounded.Bolt
                         AiModelTier.NANO_BANANA_2_1 -> Icons.Rounded.Palette
                         AiModelTier.GEMINI_3_PRO_IMAGE -> Icons.Rounded.Brush
-                        AiModelTier.GEMINI_3_1_FLASH_LITE_IMAGE -> Icons.Rounded.Bolt
                     }
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(18.dp))
                             .background(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
@@ -148,16 +178,22 @@ fun ModelSelectorSheet(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(
-                                            if (tier.isImageModel) MaterialTheme.colorScheme.secondaryContainer
-                                            else MaterialTheme.colorScheme.primaryContainer
+                                            when {
+                                                tier.isImageModel -> MaterialTheme.colorScheme.secondaryContainer
+                                                tier.isDeepSeekTier -> auraColors.emeraldContainer
+                                                else -> MaterialTheme.colorScheme.primaryContainer
+                                            }
                                         )
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
                                         text = "${tier.badge} · ${tier.contextLabel}",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = if (tier.isImageModel) MaterialTheme.colorScheme.onSecondaryContainer
-                                        else MaterialTheme.colorScheme.onPrimaryContainer
+                                        color = when {
+                                            tier.isImageModel -> MaterialTheme.colorScheme.onSecondaryContainer
+                                            tier.isDeepSeekTier -> auraColors.emerald
+                                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        }
                                     )
                                 }
                             }
