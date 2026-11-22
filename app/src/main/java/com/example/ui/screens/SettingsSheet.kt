@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -71,10 +72,13 @@ fun SettingsSheet(
     savedGroqApiKey: String,
     hasEffectiveGroqApiKey: Boolean,
     preferFastGroq: Boolean,
+    savedExaApiKey: String = "",
+    hasEffectiveExaApiKey: Boolean = false,
     onSelectTheme: (ThemeMode) -> Unit,
     onSelectLanguage: (AppLanguage) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onSaveGroqApiKey: (String) -> Unit,
+    onSaveExaApiKey: (String) -> Unit = {},
     onSetPreferFastGroq: (Boolean) -> Unit,
     onExportBackup: () -> Unit = {},
     onImportBackup: () -> Unit = {},
@@ -88,6 +92,8 @@ fun SettingsSheet(
     var revealKey by remember { mutableStateOf(false) }
     var groqKeyInput by remember(savedGroqApiKey) { mutableStateOf(savedGroqApiKey) }
     var revealGroqKey by remember { mutableStateOf(false) }
+    var exaKeyInput by remember(savedExaApiKey) { mutableStateOf(savedExaApiKey) }
+    var revealExaKey by remember { mutableStateOf(false) }
 
     LaunchedEffect(savedApiKey) {
         if (apiKeyInput.isBlank() && savedApiKey.isNotBlank()) {
@@ -97,6 +103,11 @@ fun SettingsSheet(
     LaunchedEffect(savedGroqApiKey) {
         if (groqKeyInput.isBlank() && savedGroqApiKey.isNotBlank()) {
             groqKeyInput = savedGroqApiKey
+        }
+    }
+    LaunchedEffect(savedExaApiKey) {
+        if (exaKeyInput.isBlank() && savedExaApiKey.isNotBlank()) {
+            exaKeyInput = savedExaApiKey
         }
     }
 
@@ -441,6 +452,151 @@ fun SettingsSheet(
                         onCheckedChange = onSetPreferFastGroq,
                         modifier = Modifier.testTag("prefer_fast_groq_switch")
                     )
+                }
+            }
+
+            // Live Web Search Engine (Exa API)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(
+                        width = 1.dp,
+                        color = if (hasEffectiveExaApiKey) auraColors.emerald.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.outlineVariant,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.TravelExplore,
+                            contentDescription = null,
+                            tint = if (hasEffectiveExaApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Live Web Search (Exa API)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (hasEffectiveExaApiKey) auraColors.emeraldContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                savedExaApiKey.isNotBlank() -> "Exa Active"
+                                hasEffectiveExaApiKey -> "Built-in Ready"
+                                else -> "Optional"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (hasEffectiveExaApiKey) auraColors.emerald
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Paste your Exa API key (or set EXA_API_KEY in Secrets) for high-accuracy live web search, news, and page content grounding.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = exaKeyInput,
+                    onValueChange = { exaKeyInput = it },
+                    singleLine = true,
+                    placeholder = { Text("Paste Exa API key...") },
+                    visualTransformation = if (revealExaKey) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row {
+                            if (exaKeyInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { exaKeyInput = "" },
+                                    modifier = Modifier.testTag("clear_exa_api_key_input")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear Exa input",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { revealExaKey = !revealExaKey },
+                                modifier = Modifier.testTag("toggle_reveal_exa_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = if (revealExaKey) Icons.Rounded.VisibilityOff
+                                    else Icons.Rounded.Visibility,
+                                    contentDescription = if (revealExaKey) "Hide Exa key" else "Show Exa key",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("exa_api_key_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onSaveExaApiKey(exaKeyInput)
+                            onDismiss()
+                        },
+                        enabled = exaKeyInput.isNotBlank() && exaKeyInput.trim() != savedExaApiKey,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_exa_api_key_button")
+                    ) {
+                        Text(
+                            if (savedExaApiKey.isNotBlank() && exaKeyInput.trim() == savedExaApiKey) "Saved"
+                            else "Save Exa Key"
+                        )
+                    }
+
+                    if (savedExaApiKey.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                exaKeyInput = ""
+                                onSaveExaApiKey("")
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.testTag("remove_saved_exa_api_key_button")
+                        ) {
+                            Text("Remove")
+                        }
+                    }
                 }
             }
 

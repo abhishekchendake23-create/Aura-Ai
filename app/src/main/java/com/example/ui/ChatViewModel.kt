@@ -191,6 +191,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = ""
     )
 
+    val savedExaApiKey: StateFlow<String> = prefs.userExaApiKey.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ""
+    )
+
     val preferFastGroq: StateFlow<Boolean> = prefs.preferFastGroq.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -207,6 +213,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = PreferencesManager.resolveBuildConfigGroqApiKey().isNotBlank()
+        )
+
+    val hasEffectiveExaApiKey: StateFlow<Boolean> = prefs.userExaApiKey
+        .let { exaFlow ->
+            combine(exaFlow) { values ->
+                values[0].isNotBlank() || PreferencesManager.resolveBuildConfigExaApiKey().isNotBlank()
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = PreferencesManager.resolveBuildConfigExaApiKey().isNotBlank()
         )
 
     val hasEffectiveApiKey: StateFlow<Boolean> = combine(
@@ -440,6 +458,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 "Groq Fast Key saved — ultra-fast mode & fallback active"
             } else {
                 "Saved Groq Fast Key cleared"
+            }
+        }
+    }
+
+    fun saveExaApiKey(rawKey: String) {
+        viewModelScope.launch {
+            val cleaned = rawKey.trim()
+            prefs.setUserExaApiKey(cleaned)
+            _bannerMessage.value = if (cleaned.isNotBlank()) {
+                "Exa Live Search API key saved — neural live web active"
+            } else {
+                "Saved Exa API key cleared"
             }
         }
     }

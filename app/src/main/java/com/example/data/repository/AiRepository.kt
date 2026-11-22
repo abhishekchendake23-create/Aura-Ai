@@ -306,6 +306,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     ) {
         val geminiKey = prefs.getEffectiveApiKey()
         val groqKey = prefs.getEffectiveGroqApiKey()
+        val exaKey = prefs.getEffectiveExaApiKey()
         val preferFastGroq = prefs.preferFastGroq.first()
 
         if (geminiKey.isBlank() && groqKey.isBlank()) {
@@ -340,6 +341,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 request = request,
                 geminiKey = geminiKey,
                 groqKey = groqKey,
+                exaKey = exaKey,
                 startMs = startMs,
                 emitEvent = emitEvent
             )
@@ -365,7 +367,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 liveWebSearchEngine.gatherLiveContext(
                     queries = searchQueries,
                     explicitUrls = explicitUrls,
-                    maxResults = 7
+                    maxResults = 7,
+                    exaApiKey = exaKey,
+                    preferLiveCrawl = autoFreshWeb || request.useWebSearch
                 )
             }.getOrNull()
 
@@ -401,7 +405,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         val promptText = buildUserPromptText(request, liveWebContextBlock = livePromptNotice)
         val liveSources = liveWebContext?.sourceCitations.orEmpty()
 
-        val requiresGeminiTools = request.useWebSearch || request.useCodeExecution || attachedBitmaps.size > 1
+        val hasExaResults = exaKey.isNotBlank() && !liveWebContext?.results.isNullOrEmpty()
+        val requiresGeminiTools = request.useCodeExecution ||
+            attachedBitmaps.size > 1 ||
+            (request.useWebSearch && !hasExaResults)
         val useGroqPrimary = groqKey.isNotBlank() && (
             geminiKey.isBlank() ||
                 (!requiresGeminiTools && (preferFastGroq || request.modelTier == AiModelTier.GEMINI_3_5_FLASH_LITE))
@@ -494,6 +501,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         request: AiRequest,
         geminiKey: String,
         groqKey: String,
+        exaKey: String,
         startMs: Long,
         emitEvent: suspend (AiStreamEvent) -> Unit
     ) {
@@ -513,7 +521,12 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
         for ((idx, subQ) in subQueries.withIndex()) {
             val liveStepContext = runCatching {
-                liveWebSearchEngine.gatherLiveContext(queries = listOf(subQ), maxResults = 4)
+                liveWebSearchEngine.gatherLiveContext(
+                    queries = listOf(subQ),
+                    maxResults = 4,
+                    exaApiKey = exaKey,
+                    preferLiveCrawl = true
+                )
             }.getOrNull()
 
             liveStepContext?.sourceCitations?.forEach { (uri, src) ->

@@ -169,6 +169,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val hasEffectiveApiKey by viewModel.hasEffectiveApiKey.collectAsStateWithLifecycle()
     val savedGroqApiKey by viewModel.savedGroqApiKey.collectAsStateWithLifecycle()
     val hasEffectiveGroqApiKey by viewModel.hasEffectiveGroqApiKey.collectAsStateWithLifecycle()
+    val savedExaApiKey by viewModel.savedExaApiKey.collectAsStateWithLifecycle()
+    val hasEffectiveExaApiKey by viewModel.hasEffectiveExaApiKey.collectAsStateWithLifecycle()
     val preferFastGroq by viewModel.preferFastGroq.collectAsStateWithLifecycle()
     val memories by viewModel.memories.collectAsStateWithLifecycle()
     val knowledgeDocs by viewModel.knowledgeDocs.collectAsStateWithLifecycle()
@@ -657,10 +659,13 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             savedGroqApiKey = savedGroqApiKey,
             hasEffectiveGroqApiKey = hasEffectiveGroqApiKey,
             preferFastGroq = preferFastGroq,
+            savedExaApiKey = savedExaApiKey,
+            hasEffectiveExaApiKey = hasEffectiveExaApiKey,
             onSelectTheme = { viewModel.setThemeMode(it) },
             onSelectLanguage = { viewModel.selectLanguage(it) },
             onSaveApiKey = { viewModel.saveApiKey(it) },
             onSaveGroqApiKey = { viewModel.saveGroqApiKey(it) },
+            onSaveExaApiKey = { viewModel.saveExaApiKey(it) },
             onSetPreferFastGroq = { viewModel.setPreferFastGroq(it) },
             onExportBackup = {
                 exportBackupLauncher.launch("aura_ai_backup_${System.currentTimeMillis()}.json")

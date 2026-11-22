@@ -32,6 +32,7 @@ class PreferencesManager(private val context: Context) {
         val CODE_EXECUTION_ENABLED = booleanPreferencesKey("code_execution_enabled")
         val USER_API_KEY = stringPreferencesKey("user_api_key")
         val USER_GROQ_API_KEY = stringPreferencesKey("user_groq_api_key")
+        val USER_EXA_API_KEY = stringPreferencesKey("user_exa_api_key")
         val PREFER_FAST_GROQ = booleanPreferencesKey("prefer_fast_groq")
         val VAULT_RAG_ENABLED = booleanPreferencesKey("vault_rag_enabled")
     }
@@ -85,6 +86,10 @@ class PreferencesManager(private val context: Context) {
         prefs[Keys.USER_GROQ_API_KEY]?.trim().orEmpty()
     }
 
+    val userExaApiKey: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.USER_EXA_API_KEY]?.trim().orEmpty()
+    }
+
     val preferFastGroq: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
         prefs[Keys.PREFER_FAST_GROQ] ?: true
     }
@@ -99,6 +104,12 @@ class PreferencesManager(private val context: Context) {
         val saved = userGroqApiKey.first()
         if (saved.isNotBlank()) return saved
         return resolveBuildConfigGroqApiKey()
+    }
+
+    suspend fun getEffectiveExaApiKey(): String {
+        val saved = userExaApiKey.first()
+        if (saved.isNotBlank()) return saved
+        return resolveBuildConfigExaApiKey()
     }
 
     suspend fun setUserApiKey(apiKey: String) {
@@ -119,6 +130,17 @@ class PreferencesManager(private val context: Context) {
                 prefs.remove(Keys.USER_GROQ_API_KEY)
             } else {
                 prefs[Keys.USER_GROQ_API_KEY] = cleaned
+            }
+        }
+    }
+
+    suspend fun setUserExaApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        context.auraDataStore.edit { prefs ->
+            if (cleaned.isEmpty()) {
+                prefs.remove(Keys.USER_EXA_API_KEY)
+            } else {
+                prefs[Keys.USER_EXA_API_KEY] = cleaned
             }
         }
     }
@@ -176,6 +198,14 @@ class PreferencesManager(private val context: Context) {
             val builtIn = BuildConfig.GROQ_API_KEY.trim()
             return if (builtIn.isBlank() ||
                 builtIn == "YOUR_GROQ_API_KEY" ||
+                builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
+            ) "" else builtIn
+        }
+
+        fun resolveBuildConfigExaApiKey(): String {
+            val builtIn = BuildConfig.EXA_API_KEY.trim()
+            return if (builtIn.isBlank() ||
+                builtIn == "YOUR_EXA_API_KEY" ||
                 builtIn == "MY_NEW_API_KEY_DEFAULT_VALUE"
             ) "" else builtIn
         }

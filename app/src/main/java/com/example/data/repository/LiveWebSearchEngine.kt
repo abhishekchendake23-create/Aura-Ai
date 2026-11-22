@@ -5,8 +5,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -46,7 +49,9 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
     suspend fun gatherLiveContext(
         queries: List<String>,
         explicitUrls: List<String> = emptyList(),
-        maxResults: Int = 7
+        maxResults: Int = 7,
+        exaApiKey: String = "",
+        preferLiveCrawl: Boolean = true
     ): LiveWebContext = withContext(Dispatchers.IO) {
         val normalizedQueries = queries
             .map { extractCleanSearchQuery(it) }
@@ -56,9 +61,62 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
 
         val primaryQuery = normalizedQueries.firstOrNull().orEmpty()
         val allResults = linkedMapOf<String, WebSearchResult>()
+        val cleanExaKey = exaApiKey.trim()
+        val exaUrlContents = linkedMapOf<String, String>()
 
-        if (normalizedQueries.isNotEmpty()) {
+        // 1. Primary Engine: Exa Neural + Live Web Search API when EXA_API_KEY is configured
+        if (cleanExaKey.isNotBlank() && (normalizedQueries.isNotEmpty() || explicitUrls.isNotEmpty())) {
             withTimeoutOrNull(11_000L) {
+                coroutineScope {
+                    val exaSearchTasks = normalizedQueries.map { q ->
+                        async {
+                            runCatching {
+                                searchExaApi(
+                                    apiKey = cleanExaKey,
+                                    query = q,
+                                    maxResults = maxResults,
+                                    preferLiveCrawl = preferLiveCrawl
+                                )
+                            }.getOrDefault(emptyList())
+                        }
+                    }
+                    val exaContentsTask: kotlinx.coroutines.Deferred<List<WebSearchResult>>? =
+                        if (explicitUrls.isNotEmpty()) {
+                            async {
+                                runCatching {
+                                    fetchExaContentsApi(apiKey = cleanExaKey, urls = explicitUrls)
+                                }.getOrDefault(emptyList())
+                            }
+                        } else {
+                            null
+                        }
+
+                    exaSearchTasks.forEach { task ->
+                        task.await().forEach { item ->
+                            val key = normalizeUrlKey(item.url)
+                            val existing = allResults[key]
+                            if (existing == null || item.snippet.length > existing.snippet.length) {
+                                allResults[key] = item
+                            }
+                        }
+                    }
+
+                    exaContentsTask?.await()?.forEach { item ->
+                        if (item.snippet.isNotBlank()) {
+                            exaUrlContents[item.url] = item.snippet.take(1800)
+                        }
+                        val key = normalizeUrlKey(item.url)
+                        if (!allResults.containsKey(key)) {
+                            allResults[key] = item
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Multi-Source Fallback / Enrichment (if Exa key absent or returned sparse results)
+        if (normalizedQueries.isNotEmpty() && allResults.size < 3) {
+            withTimeoutOrNull(10_500L) {
                 coroutineScope {
                     val searchTasks = normalizedQueries.flatMap { q ->
                         listOf(
@@ -77,7 +135,6 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
                         }
                     }
 
-                    // Fallback to DuckDuckGo Lite if HTML + RSS returned too few hits
                     if (allResults.size < 2 && primaryQuery.isNotBlank()) {
                         runCatching { searchDuckDuckGoLite(primaryQuery, maxResults = 5) }
                             .getOrDefault(emptyList())
@@ -94,11 +151,14 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
 
         val rankedResults = allResults.values.take(maxResults)
 
-        // Fetch full readable text for explicit prompt URLs + up to 2 direct top result pages
+        // Fetch readable page text for explicit URLs not already retrieved via Exa, plus top direct results with short snippets
         val urlsToFetch = buildList {
-            explicitUrls.forEach { add(it) }
+            explicitUrls
+                .filter { !exaUrlContents.containsKey(it) }
+                .forEach { add(it) }
             rankedResults
                 .asSequence()
+                .filter { it.snippet.length < 320 }
                 .map { it.url }
                 .filter { !it.contains("news.google.com/rss/articles", ignoreCase = true) }
                 .filter { !it.contains("wikipedia.org/wiki/", ignoreCase = true) }
@@ -106,16 +166,29 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
                 .forEach { add(it) }
         }.distinctBy { normalizeUrlKey(it) }.take(3)
 
-        val pageExcerpts = withTimeoutOrNull(6_500L) {
-            coroutineScope {
-                urlsToFetch.map { url ->
-                    async {
-                        val excerpt = runCatching { fetchPageSummary(url, maxChars = 1600) }.getOrNull()
-                        if (!excerpt.isNullOrBlank()) url to excerpt else null
-                    }
-                }.mapNotNull { it.await() }
+        val directFetchedExcerpts = if (urlsToFetch.isNotEmpty()) {
+            withTimeoutOrNull(6_000L) {
+                coroutineScope {
+                    urlsToFetch.map { url ->
+                        async {
+                            val excerpt = runCatching { fetchPageSummary(url, maxChars = 1600) }.getOrNull()
+                            if (!excerpt.isNullOrBlank()) url to excerpt else null
+                        }
+                    }.mapNotNull { it.await() }
+                }
+            }.orEmpty()
+        } else {
+            emptyList()
+        }
+
+        val pageExcerpts = buildList {
+            exaUrlContents.forEach { (url, text) -> add(url to text) }
+            directFetchedExcerpts.forEach { pair ->
+                if (none { normalizeUrlKey(it.first) == normalizeUrlKey(pair.first) }) {
+                    add(pair)
+                }
             }
-        }.orEmpty()
+        }
 
         val sourceCitations = linkedMapOf<String, SourceCitation>()
         rankedResults.forEach { item ->
@@ -148,7 +221,7 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
                     if (!item.publishedAt.isNullOrBlank()) append(" · ${item.publishedAt}")
                     append("\nURL: ${item.url}\n")
                     if (item.snippet.isNotBlank()) {
-                        append("Snippet: ${item.snippet}\n")
+                        append("Content: ${item.snippet}\n")
                     }
                     append("\n")
                 }
@@ -169,6 +242,67 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
             formattedPromptBlock = promptBlock,
             sourceCitations = sourceCitations
         )
+    }
+
+    private fun searchExaApi(
+        apiKey: String,
+        query: String,
+        maxResults: Int,
+        preferLiveCrawl: Boolean
+    ): List<WebSearchResult> {
+        val contentsObj = JSONObject().apply {
+            put("text", JSONObject().put("maxCharacters", 1800))
+            put(
+                "highlights",
+                JSONObject().apply {
+                    put("numSentences", 3)
+                    put("highlightsPerUrl", 2)
+                }
+            )
+            put("livecrawl", if (preferLiveCrawl) "preferred" else "fallback")
+        }
+        val payload = JSONObject().apply {
+            put("query", query)
+            put("type", "auto")
+            put("numResults", maxResults.coerceIn(1, 10))
+            put("contents", contentsObj)
+        }
+        val req = Request.Builder()
+            .url(EXA_SEARCH_URL)
+            .header("x-api-key", apiKey)
+            .header("Accept", "application/json")
+            .post(payload.toString().toRequestBody(EXA_JSON_MEDIA_TYPE))
+            .build()
+
+        searchClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return emptyList()
+            val body = res.body?.string().orEmpty()
+            return parseExaResultsJson(body, maxResults = maxResults)
+        }
+    }
+
+    private fun fetchExaContentsApi(
+        apiKey: String,
+        urls: List<String>
+    ): List<WebSearchResult> {
+        if (urls.isEmpty()) return emptyList()
+        val payload = JSONObject().apply {
+            put("urls", JSONArray(urls.take(3)))
+            put("text", JSONObject().put("maxCharacters", 2000))
+            put("livecrawl", "preferred")
+        }
+        val req = Request.Builder()
+            .url(EXA_CONTENTS_URL)
+            .header("x-api-key", apiKey)
+            .header("Accept", "application/json")
+            .post(payload.toString().toRequestBody(EXA_JSON_MEDIA_TYPE))
+            .build()
+
+        searchClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return emptyList()
+            val body = res.body?.string().orEmpty()
+            return parseExaResultsJson(body, maxResults = urls.size)
+        }
     }
 
     private fun searchDuckDuckGoHtml(query: String, maxResults: Int): List<WebSearchResult> {
@@ -295,8 +429,63 @@ class LiveWebSearchEngine(baseHttpClient: OkHttpClient) {
     }
 
     companion object {
+        private const val EXA_SEARCH_URL = "https://api.exa.ai/search"
+        private const val EXA_CONTENTS_URL = "https://api.exa.ai/contents"
+        private val EXA_JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+        fun parseExaResultsJson(jsonString: String, maxResults: Int = 7): List<WebSearchResult> {
+            if (jsonString.isBlank()) return emptyList()
+            return runCatching {
+                val root = JSONObject(jsonString)
+                val items = root.optJSONArray("results") ?: return@runCatching emptyList()
+                buildList {
+                    for (i in 0 until minOf(items.length(), maxResults)) {
+                        val obj = items.optJSONObject(i) ?: continue
+                        val url = obj.optString("url").trim()
+                        if (!url.startsWith("http", ignoreCase = true)) continue
+                        val rawTitle = obj.optString("title").trim()
+                        val hostDomain = runCatching {
+                            java.net.URI(url).host?.removePrefix("www.")
+                        }.getOrNull()?.takeIf { it.isNotBlank() }
+
+                        val publishedDate = obj.optString("publishedDate").trim().take(10).ifBlank { null }
+                        val highlightsArr = obj.optJSONArray("highlights")
+                        val highlights = buildList {
+                            if (highlightsArr != null) {
+                                for (j in 0 until highlightsArr.length()) {
+                                    val h = highlightsArr.optString(j).replace(Regex("\\s+"), " ").trim()
+                                    if (h.isNotBlank()) add(h)
+                                }
+                            }
+                        }.joinToString(" … ")
+
+                        val fullText = obj.optString("text")
+                            .replace(Regex("\\s+"), " ")
+                            .trim()
+
+                        val combinedSnippet = when {
+                            highlights.isNotBlank() && fullText.isNotBlank() ->
+                                "$highlights\nExcerpt: ${fullText.take(1200)}".take(1650)
+                            fullText.isNotBlank() -> fullText.take(1650)
+                            highlights.isNotBlank() -> highlights.take(1200)
+                            else -> ""
+                        }
+
+                        add(
+                            WebSearchResult(
+                                title = rawTitle.ifBlank { hostDomain ?: url },
+                                url = url,
+                                snippet = combinedSnippet,
+                                publishedAt = publishedDate,
+                                sourceName = hostDomain
+                            )
+                        )
+                    }
+                }
+            }.getOrDefault(emptyList())
+        }
 
         private val SLASH_COMMAND_PREFIXES = listOf(
             "Conduct deep multi-angle research, cross-verify facts, compare trade-offs in Markdown tables, and produce an authoritative cited report on:",

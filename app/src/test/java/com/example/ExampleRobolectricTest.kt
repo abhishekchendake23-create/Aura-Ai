@@ -413,4 +413,38 @@ class ExampleRobolectricTest {
         assertTrue(systemInstruction.contains("Current Date & Time:"))
         assertTrue(systemInstruction.contains("Live Web Search Grounding & URL Context ON"))
     }
+
+    @Test
+    fun `exa search JSON parsing extracts title, url, publishedDate, highlights, and text cleanly`() = runTest {
+        val sampleExaJson = """
+            {
+              "results": [
+                {
+                  "title": "24K Gold Rate Today in Pune",
+                  "url": "https://www.goodreturns.in/gold-rates/pune.html",
+                  "publishedDate": "2026-11-21T09:15:00.000Z",
+                  "highlights": ["Today 24K gold price in Pune is Rs 78,450 per 10 grams."],
+                  "text": "Today 24K gold price in Pune is Rs 78,450 per 10 grams and 22K is Rs 71,910 per 10 grams."
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = com.example.data.repository.LiveWebSearchEngine.parseExaResultsJson(sampleExaJson)
+        assertEquals(1, parsed.size)
+        assertEquals("24K Gold Rate Today in Pune", parsed[0].title)
+        assertEquals("https://www.goodreturns.in/gold-rates/pune.html", parsed[0].url)
+        assertEquals("2026-11-21", parsed[0].publishedAt)
+        assertEquals("goodreturns.in", parsed[0].sourceName)
+        assertTrue(parsed[0].snippet.contains("78,450"))
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.preferences.PreferencesManager(context)
+        prefs.setUserExaApiKey("  exa_test_key_123  ")
+        assertEquals("exa_test_key_123", prefs.userExaApiKey.first())
+        assertEquals("exa_test_key_123", prefs.getEffectiveExaApiKey())
+
+        prefs.setUserExaApiKey("")
+        assertEquals("", prefs.userExaApiKey.first())
+    }
 }
