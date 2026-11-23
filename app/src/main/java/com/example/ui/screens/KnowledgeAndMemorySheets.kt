@@ -278,21 +278,27 @@ fun KnowledgeVaultSheet(
     var statusText by remember { mutableStateOf<String?>(null) }
 
     val docPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
                 isIndexing = true
-                statusText = "Extracting & indexing document chunks locally..."
-                val mime = context.contentResolver.getType(uri)
-                val title = uri.lastPathSegment?.substringAfterLast('/') ?: "Vault Document"
-                val extracted = KnowledgeRagEngine.extractTextFromDocumentUri(context, uri, mime)
-                if (extracted.isBlank()) {
-                    statusText = "Could not extract readable text from that file."
+                var indexedCount = 0
+                uris.forEachIndexed { idx, uri ->
+                    statusText = "Indexing file ${idx + 1} of ${uris.size} locally..."
+                    val mime = context.contentResolver.getType(uri)
+                    val title = uri.lastPathSegment?.substringAfterLast('/') ?: "Vault Document ${idx + 1}"
+                    val extracted = KnowledgeRagEngine.extractTextFromDocumentUri(context, uri, mime)
+                    if (extracted.isNotBlank()) {
+                        val srcType = if (mime?.contains("pdf", true) == true || title.endsWith(".pdf", true)) "PDF" else "Text"
+                        onIndexDocument(title, srcType, extracted)
+                        indexedCount++
+                    }
+                }
+                statusText = if (indexedCount > 0) {
+                    "Indexed $indexedCount of ${uris.size} file(s) into Knowledge Vault."
                 } else {
-                    val srcType = if (mime?.contains("pdf", true) == true || title.endsWith(".pdf", true)) "PDF" else "Text"
-                    onIndexDocument(title, srcType, extracted)
-                    statusText = "Indexed '$title' into local Knowledge Vault."
+                    "Could not extract readable text from selected files."
                 }
                 isIndexing = false
             }

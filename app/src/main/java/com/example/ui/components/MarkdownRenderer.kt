@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,7 +71,9 @@ import com.example.ui.screens.ArtifactPreviewDialog
 import com.example.ui.screens.isPreviewableArtifactLanguage
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
@@ -406,25 +409,52 @@ private fun CodeBlockCard(
         }
     }
 
-    val highlightedCode = remember(code, cleanLang, auraColors.codeText) {
-        if (cleanLang.equals("diff", ignoreCase = true)) {
-            highlightDiffSyntax(
-                code = code,
-                baseColor = auraColors.codeText,
-                addedColor = auraColors.emerald,
-                removedColor = errorColor,
-                hunkColor = auraColors.sparkleStart
-            )
+    val isDiff = remember(cleanLang) { cleanLang.equals("diff", ignoreCase = true) }
+    val diffStats = remember(code, isDiff) {
+        if (!isDiff) null
+        else {
+            var added = 0
+            var removed = 0
+            code.lineSequence().forEach { ln ->
+                when {
+                    ln.startsWith("+") && !ln.startsWith("+++") -> added++
+                    ln.startsWith("-") && !ln.startsWith("---") -> removed++
+                }
+            }
+            added to removed
+        }
+    }
+
+    val plainAnnotated = remember(code) { AnnotatedString(code) }
+    val codeTextColor = auraColors.codeText
+    val keywordColor = auraColors.sparkleMid
+    val stringColor = auraColors.emerald
+    val commentColor = auraColors.codeText.copy(alpha = 0.48f)
+    val numberColor = auraColors.sparkleStart
+    val annotationColor = auraColors.sparkleEnd
+
+    val highlightedCode by produceState(
+        initialValue = plainAnnotated,
+        key1 = code,
+        key2 = cleanLang,
+        key3 = isLiveStreaming
+    ) {
+        if (isLiveStreaming && code.length > 900) {
+            value = plainAnnotated
+        } else if (code.length <= 900) {
+            value = if (isDiff) {
+                highlightDiffSyntax(code, codeTextColor, stringColor, errorColor, numberColor)
+            } else {
+                highlightCodeSyntax(code, codeTextColor, keywordColor, stringColor, commentColor, numberColor, annotationColor)
+            }
         } else {
-            highlightCodeSyntax(
-                code = code,
-                baseColor = auraColors.codeText,
-                keywordColor = auraColors.sparkleMid,
-                stringColor = auraColors.emerald,
-                commentColor = auraColors.codeText.copy(alpha = 0.48f),
-                numberColor = auraColors.sparkleStart,
-                annotationColor = auraColors.sparkleEnd
-            )
+            value = withContext(Dispatchers.Default) {
+                if (isDiff) {
+                    highlightDiffSyntax(code, codeTextColor, stringColor, errorColor, numberColor)
+                } else {
+                    highlightCodeSyntax(code, codeTextColor, keywordColor, stringColor, commentColor, numberColor, annotationColor)
+                }
+            }
         }
     }
 
@@ -470,6 +500,18 @@ private fun CodeBlockCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (diffStats != null) {
+                    Text(
+                        text = "+${diffStats.first}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = auraColors.emerald
+                    )
+                    Text(
+                        text = "-${diffStats.second}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = errorColor
+                    )
+                }
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,

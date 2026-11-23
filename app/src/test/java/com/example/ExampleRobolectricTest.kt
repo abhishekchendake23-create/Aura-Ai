@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AuraDatabase
 import com.example.data.local.MessageEntity
+import com.example.data.preferences.PreferencesManager
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.SourceCitation
 import com.example.data.repository.parseSources
@@ -14,6 +15,8 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -711,5 +714,362 @@ class ExampleRobolectricTest {
         assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("jsx"))
         assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("tailwind"))
         assertFalse(com.example.ui.screens.isPreviewableArtifactLanguage("kotlin"))
+    }
+
+    @Test
+    fun `github and url reader parses repo tree blob urls prioritizes code and strips html`() {
+        val urls = com.example.data.repository.GitHubAndUrlReader.extractUrls(
+            "Check https://github.com/Abhynex/AuraAI/tree/main/app/src and https://example.com/docs."
+        )
+        assertEquals(2, urls.size)
+
+        val treeSpec = com.example.data.repository.GitHubAndUrlReader.parseGitHubRepoUrl(
+            "https://github.com/Abhynex/AuraAI/tree/main/app/src"
+        )
+        assertNotNull(treeSpec)
+        assertEquals("Abhynex", treeSpec?.owner)
+        assertEquals("AuraAI", treeSpec?.repo)
+        assertEquals("main", treeSpec?.branch)
+        assertEquals("app/src", treeSpec?.path)
+        assertFalse(treeSpec?.isBlob ?: true)
+
+        val blobSpec = com.example.data.repository.GitHubAndUrlReader.parseGitHubRepoUrl(
+            "https://github.com/Abhynex/AuraAI/blob/dev/src/Main.kt"
+        )
+        assertEquals("dev", blobSpec?.branch)
+        assertEquals("src/Main.kt", blobSpec?.path)
+        assertTrue(blobSpec?.isBlob ?: false)
+
+        val prioritized = com.example.data.repository.GitHubAndUrlReader.prioritizeRepoFiles(
+            listOf("build/tmp/a.kt", "logo.png", "src/Helper.kt", "README.md")
+        )
+        assertEquals(listOf("README.md", "src/Helper.kt"), prioritized)
+
+        val (title, cleanText) = com.example.data.repository.GitHubAndUrlReader.htmlToCleanText(
+            "<html><head><title>Aura &amp; Guide</title><script>evil()</script></head><body><h1>Fast Setup</h1><p>Hello world</p></body></html>",
+            "https://example.com"
+        )
+        assertEquals("Aura & Guide", title)
+        assertTrue(cleanText.contains("Fast Setup"))
+        assertFalse(cleanText.contains("evil"))
+    }
+
+    @Test
+    fun `project zip exporter extracts multi-file markdown blocks blocks traversal and writes valid zip`() {
+        val md = """
+            ```kotlin:app/Main.kt
+            fun main() = println("Hi")
+            ```
+            ```python
+            # File: scripts/train.py
+            print("ready")
+            ```
+            ```bash:../../etc/shadow
+            ignored
+            ```
+        """.trimIndent()
+        val files = com.example.data.repository.ProjectZipExporter.extractNamedFilesFromMarkdown(md)
+        assertEquals(2, files.size)
+        assertEquals("app/Main.kt", files[0].relativePath)
+        assertEquals("scripts/train.py", files[1].relativePath)
+
+        val zipBytes = com.example.data.repository.ProjectZipExporter.buildZipBytes(files)
+        val entries = mutableListOf<String>()
+        java.util.zip.ZipInputStream(zipBytes.inputStream()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                entries.add(entry.name)
+                entry = zis.nextEntry
+            }
+        }
+        assertEquals(listOf("app/Main.kt", "scripts/train.py"), entries)
+    }
+
+    @Test
+    fun `rag engine stemming bigram boost and global deep message search plus autopilot crud work`() = runTest {
+        val chunkA = com.example.data.local.KnowledgeChunkEntity(
+            id = "c1",
+            docId = "d1",
+            docTitle = "Coroutines Networking Guide",
+            chunkIndex = 0,
+            content = "Retry strategies handle transient timeouts safely."
+        )
+        val chunkB = com.example.data.local.KnowledgeChunkEntity(
+            id = "c2",
+            docId = "d1",
+            docTitle = "UI Theme",
+            chunkIndex = 1,
+            content = "AMOLED palette colors and typography tokens."
+        )
+        val ranked = com.example.data.repository.KnowledgeRagEngine.retrieveTopChunks(
+            query = "retrying coroutine networks",
+            allChunks = listOf(chunkB, chunkA),
+            topK = 1
+        )
+        assertEquals("c1", ranked.first().id)
+
+        val convo = repository.createConversation("Backend Debug", "gemini-3.8-flash", "persona_engineer")
+        repository.saveMessage(
+            MessageEntity(
+                id = "m_search_1",
+                conversationId = convo.id,
+                role = "assistant",
+                content = "Fixed ViewModelStateFlow race condition using Mutex lock.",
+                timestamp = 5000L
+            )
+        )
+        val hits = repository.searchAllMessages("Mutex lock")
+        assertEquals(1, hits.size)
+        assertEquals("Backend Debug", hits.first().conversationTitle)
+        assertEquals("m_search_1", hits.first().messageId)
+
+        val task = repository.createAutopilotTask(
+            title = "Morning AI Brief",
+            prompt = "Summarize top Kotlin updates",
+            intervalHours = 24,
+            useWebSearch = true
+        )
+        assertTrue(task.isEnabled)
+        repository.setAutopilotTaskEnabled(task.id, false)
+        assertFalse(repository.getAutopilotTaskById(task.id)?.isEnabled ?: true)
+        repository.deleteAutopilotTask(task.id)
+        assertNull(repository.getAutopilotTaskById(task.id))
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+        assertFalse(prefs.councilModeEnabled.first())
+        prefs.setCouncilModeEnabled(true)
+        assertTrue(prefs.councilModeEnabled.first())
+        prefs.setCouncilModeEnabled(false)
+    }
+
+    @Test
+    fun `project workspaces, thread forking, and arena winner locking work end to end`() = runTest {
+        val project = repository.saveProject(
+            id = null,
+            name = "Abhynex Core",
+            description = "Android Kotlin + Compose architecture workspace",
+            customInstructions = "Always use MVVM + Room",
+            pinnedUrlsOrNotes = "https://kotlinlang.org"
+        )
+        val convo = repository.createConversation(
+            title = "Main Thread",
+            modelId = "gemini-3.8-flash",
+            personaId = "persona_engineer",
+            projectId = project.id
+        )
+        assertEquals(project.id, repository.getConversation(convo.id)?.projectId)
+
+        val u1 = MessageEntity("u1", convo.id, "user", "Compare Coroutines vs RxJava", timestamp = 1000L)
+        val arenaVariants = listOf(
+            com.example.data.local.MessageVariant(
+                content = "Coroutines are structured concurrency native to Kotlin.",
+                thinkingContent = "Alpha trace",
+                thinkingDurationMs = 500L,
+                engineLabel = "Engine Alpha",
+                createdAt = 2000L
+            ),
+            com.example.data.local.MessageVariant(
+                content = "Coroutines beat RxJava on Compose Lifecycle integration.",
+                thinkingContent = "Beta trace",
+                thinkingDurationMs = 700L,
+                engineLabel = "Engine Beta",
+                createdAt = 2100L
+            )
+        )
+        val a1 = MessageEntity(
+            id = "a1",
+            conversationId = convo.id,
+            role = "assistant",
+            content = arenaVariants[0].content,
+            modelDisplayName = "Aura Arena",
+            variantsJson = com.example.data.local.serializeMessageVariants(arenaVariants),
+            selectedVariantIndex = 0,
+            timestamp = 2000L
+        )
+        val u2 = MessageEntity("u2", convo.id, "user", "Later follow up", timestamp = 3000L)
+        repository.saveMessage(u1)
+        repository.saveMessage(a1)
+        repository.saveMessage(u2)
+
+        // Lock Engine Beta as winner
+        repository.selectAssistantVariant(a1, targetIndex = 1, lockAsFinal = true)
+        val locked = repository.getMessagesOnce(convo.id).first { it.id == "a1" }
+        assertEquals("Coroutines beat RxJava on Compose Lifecycle integration.", locked.content)
+        assertNull(locked.variantsJson)
+
+        // Fork up to a1 (should exclude u2)
+        val forked = repository.forkConversationFromMessage(convo.id, "a1")
+        assertNotNull(forked)
+        assertTrue(forked!!.title.endsWith("(Fork)"))
+        assertEquals(project.id, forked.projectId)
+        val forkedMsgs = repository.getMessagesOnce(forked.id)
+        assertEquals(2, forkedMsgs.size)
+        assertEquals("Compare Coroutines vs RxJava", forkedMsgs[0].content)
+
+        // Deleting project clears projectId on conversations without deleting chats
+        repository.deleteProject(project.id)
+        assertNull(repository.getConversation(convo.id)?.projectId)
+    }
+
+    @Test
+    fun `artifact hub auto-indexes versions and prompt templates substitute variables cleanly`() = runTest {
+        val convo = repository.createConversation("Build Deck", "gemini-3.8-flash", "persona_general")
+        val md1 = """
+            Here is your deck and data:
+            ```slides
+            # Slide One
+            - Metric A
+            ---
+            # Slide Two
+            - Metric B
+            ```
+            ```csv
+            Quarter,Revenue
+            Q1,120
+            Q2,185
+            ```
+            ```kotlin:app/Worker.kt
+            package com.example
+            fun workNow(): Int {
+                return 42 + 1
+            }
+            ```
+        """.trimIndent()
+
+        val savedV1 = repository.extractAndSaveArtifactsFromMessage(convo.id, "m1", md1)
+        assertEquals(3, savedV1.size)
+        assertEquals(1, savedV1.first { it.title == "app/Worker.kt" }.versionNumber)
+
+        val md2 = """
+            Updated Worker:
+            ```kotlin:app/Worker.kt
+            package com.example
+            fun workNow(): Int {
+                return 99 + 1
+            }
+            ```
+        """.trimIndent()
+        val savedV2 = repository.extractAndSaveArtifactsFromMessage(convo.id, "m2", md2)
+        assertEquals(1, savedV2.size)
+        assertEquals(2, savedV2.first().versionNumber)
+
+        repository.ensureDefaultPromptTemplates()
+        val templates = repository.observePromptTemplates().first()
+        assertTrue(templates.size >= 4)
+        val vars = ChatRepository.extractTemplateVariables("Design {{project}} for {{scale}} users with {{project}}.")
+        assertEquals(listOf("project", "scale"), vars)
+        val filled = ChatRepository.substituteTemplateVariables(
+            "Design {{project}} for {{scale}} users.",
+            mapOf("project" to "Aura AI", "scale" to "10M")
+        )
+        assertEquals("Design Aura AI for 10M users.", filled)
+    }
+
+    @Test
+    fun `webhook ssrf guard, template substitution, slides and csv html preview, csv reader, and native actions work`() = runTest {
+        // 1. SSRF protection blocks private/localhost and allows public HTTPS
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("http://127.0.0.1:8080/hook"))
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("http://192.168.1.1/admin"))
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("http://10.0.0.5/secret"))
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("http://169.254.169.254/latest/meta-data"))
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("http://localhost:3000/api"))
+        assertFalse(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("file:///etc/passwd"))
+        assertTrue(com.example.data.repository.WebhookToolEngine.isSafePublicWebhookUrl("https://api.github.com/search/repositories?q={{query}}"))
+
+        val substitutedUrl = com.example.data.repository.WebhookToolEngine.substituteQueryTemplate(
+            "https://api.example.com/search?q={{query}}",
+            "kotlin compose",
+            urlEncode = true
+        )
+        assertEquals("https://api.example.com/search?q=kotlin+compose", substitutedUrl)
+
+        // 2. Slides & CSV previewability & HTML generation
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("slides"))
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("deck"))
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("csv"))
+        assertTrue(com.example.ui.screens.isPreviewableArtifactLanguage("tsv"))
+
+        val slidesHtml = com.example.ui.screens.buildArtifactHtml("slides", "# Title\n- Point 1\n---\n# Slide 2\n- Point 2")
+        assertTrue(slidesHtml.contains("Aura Deck Studio"))
+        assertTrue(slidesHtml.contains("nextBtn"))
+
+        val csvHtml = com.example.ui.screens.buildArtifactHtml("csv", "Model,Score\nAlpha,92\nBeta,88")
+        assertTrue(csvHtml.contains("chartBox"))
+        assertTrue(csvHtml.contains("tableWrap"))
+
+        // 3. CSV reader analytics summary
+        val csvSummary = com.example.data.repository.ProjectZipReader.summarizeCsvIfApplicable(
+            fileName = "metrics.csv",
+            content = "Name,LatencyMs,Score\nA,120,90\nB,80,95\nC,100,98"
+        )
+        assertNotNull(csvSummary)
+        assertTrue(csvSummary!!.contains("Total Data Rows Parsed: 3"))
+        assertTrue(csvSummary.contains("LatencyMs"))
+
+        // 4. Native action extractor detects Email, Calendar, and URL chips
+        val actions = com.example.data.repository.NativeActionExtractor.extractActions(
+            """
+            # Product Architecture Meeting
+            Subject: Q4 Launch Sync with Engineering
+            Dear team@abhynex.dev,
+            Please join our schedule meeting tomorrow at 10:00 AM. Docs: https://kotlinlang.org
+            Regards, Abhi
+            """.trimIndent()
+        )
+        assertTrue(actions.any { it is com.example.data.repository.NativeActionChip.DraftEmail && it.toAddress == "team@abhynex.dev" })
+        assertTrue(actions.any { it is com.example.data.repository.NativeActionChip.AddCalendarEvent })
+        assertTrue(actions.any { it is com.example.data.repository.NativeActionChip.OpenLink && it.url == "https://kotlinlang.org" })
+
+        // 5. Preferences persist Workbench tuning, Autonomous Agent, and Compare Arena
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+        prefs.setWorkbenchTemperature(0.25f)
+        prefs.setWorkbenchTopP(0.8f)
+        prefs.setWorkbenchMaxTokens(16384)
+        prefs.setWorkbenchThinkingBudget("DEEP")
+        prefs.setJsonSchemaMode(true)
+        prefs.setJsonSchemaText("""{"ok": true}""")
+        prefs.setSystemInstructionOverride("Strict JSON only")
+        prefs.setAutonomousAgentEnabled(true)
+        prefs.setCompareArenaEnabled(true)
+
+        assertEquals(0.25f, prefs.workbenchTemperature.first(), 0.01f)
+        assertEquals(0.8f, prefs.workbenchTopP.first(), 0.01f)
+        assertEquals(16384, prefs.workbenchMaxTokens.first())
+        assertEquals("DEEP", prefs.workbenchThinkingBudget.first())
+        assertTrue(prefs.jsonSchemaMode.first())
+        assertTrue(prefs.autonomousAgentEnabled.first())
+        assertTrue(prefs.compareArenaEnabled.first())
+
+        prefs.resetWorkbenchTuning()
+        assertEquals(0.7f, prefs.workbenchTemperature.first(), 0.01f)
+        assertFalse(prefs.jsonSchemaMode.first())
+        prefs.setAutonomousAgentEnabled(false)
+        prefs.setCompareArenaEnabled(false)
+
+        // 6. Backup schema v2 exports & restores projects, artifacts, promptTemplates, customWebhooks
+        val hook = repository.createCustomWebhook(
+            name = "GitHub Search",
+            description = "Searches public repos",
+            endpointUrl = "https://api.github.com/search/repositories?q={{query}}",
+            httpMethod = "GET"
+        )
+        val tpl = repository.createCustomPromptTemplate("My Template", "Code", "Sys", "Check {{item}}")
+        val proj = repository.saveProject(null, "BackupProj", "Desc", "Instr", "Notes")
+        val backupRepo = com.example.data.repository.BackupRepository(database.auraDao(), context)
+        val (payload, exportedStats) = backupRepo.buildBackupPayload()
+        assertEquals(0, exportedStats.conversations)
+        assertTrue(payload.contains("\"schemaVersion\":2") || payload.contains("\"schemaVersion\": 2"))
+        assertTrue(payload.contains("BackupProj"))
+        assertTrue(payload.contains("GitHub Search"))
+        assertTrue(payload.contains("My Template"))
+
+        database.clearAllTables()
+        val restoredStats = backupRepo.restoreFromJsonString(payload)
+        assertEquals(0, restoredStats.conversations)
+        assertNotNull(repository.getProjectById(proj.id))
+        assertTrue(repository.getEnabledWebhooksOnce().any { it.id == hook.id })
+        assertTrue(repository.observePromptTemplates().first().any { it.id == tpl.id })
     }
 }

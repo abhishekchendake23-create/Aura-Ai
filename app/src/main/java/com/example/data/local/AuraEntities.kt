@@ -13,7 +13,8 @@ data class ConversationEntity(
     val personaId: String,
     val isPinned: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val projectId: String? = null
 )
 
 @Entity(
@@ -54,7 +55,8 @@ data class MessageVariant(
     val thinkingContent: String? = null,
     val thinkingDurationMs: Long = 0L,
     val sourcesJson: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val engineLabel: String? = null
 )
 
 fun serializeMessageVariants(variants: List<MessageVariant>): String? {
@@ -67,6 +69,7 @@ fun serializeMessageVariants(variants: List<MessageVariant>): String? {
         obj.put("thinkingDurationMs", v.thinkingDurationMs)
         v.sourcesJson?.let { obj.put("sourcesJson", it) }
         obj.put("createdAt", v.createdAt)
+        v.engineLabel?.let { obj.put("engineLabel", it) }
         array.put(obj)
     }
     return array.toString()
@@ -89,7 +92,9 @@ fun parseMessageVariants(rawJson: String?): List<MessageVariant> {
                             thinkingDurationMs = obj.optLong("thinkingDurationMs", 0L),
                             sourcesJson = obj.optString("sourcesJson")
                                 .takeIf { it.isNotBlank() && obj.has("sourcesJson") && !obj.isNull("sourcesJson") },
-                            createdAt = obj.optLong("createdAt", 0L)
+                            createdAt = obj.optLong("createdAt", 0L),
+                            engineLabel = obj.optString("engineLabel")
+                                .takeIf { it.isNotBlank() && obj.has("engineLabel") && !obj.isNull("engineLabel") }
                         )
                     )
                 }
@@ -147,4 +152,78 @@ data class KnowledgeChunkEntity(
     val docTitle: String,
     val chunkIndex: Int,
     val content: String
+)
+
+@Entity(tableName = "autopilot_tasks")
+data class AutopilotTaskEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val prompt: String,
+    val intervalHours: Int = 24,
+    val useWebSearch: Boolean = true,
+    val isEnabled: Boolean = true,
+    val lastRunAt: Long = 0L,
+    val lastResultSummary: String = "",
+    val lastConversationId: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "projects")
+data class ProjectEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String = "",
+    val customInstructions: String = "",
+    val pinnedUrlsOrNotes: String = "",
+    val accentHex: String = "#7AA2FF",
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "artifacts",
+    indices = [Index(value = ["conversationId"]), Index(value = ["messageId"])]
+)
+data class ArtifactEntity(
+    @PrimaryKey val id: String,
+    val conversationId: String,
+    val messageId: String,
+    val title: String,
+    val language: String,
+    val code: String,
+    val versionNumber: Int = 1,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "prompt_templates")
+data class PromptTemplateEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val category: String = "General",
+    val systemPrompt: String = "",
+    val userTemplate: String,
+    val isBuiltIn: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "custom_webhooks")
+data class CustomWebhookEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String = "",
+    val endpointUrl: String,
+    val httpMethod: String = "GET",
+    val headersJson: String = "",
+    val bodyTemplate: String = "",
+    val isEnabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class MessageSearchHit(
+    val messageId: String,
+    val conversationId: String,
+    val conversationTitle: String,
+    val role: String,
+    val content: String,
+    val timestamp: Long
 )

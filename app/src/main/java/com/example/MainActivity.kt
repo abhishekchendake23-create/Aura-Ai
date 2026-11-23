@@ -11,6 +11,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.service.AutopilotScheduler
 import com.example.ui.ChatViewModel
 import com.example.ui.screens.AuraAppRoot
 import com.example.ui.theme.AuraTheme
@@ -49,6 +50,13 @@ class MainActivity : ComponentActivity() {
 
     private fun processIncomingIntent(incoming: Intent?) {
         if (incoming == null) return
+
+        val autopilotConvoId = incoming.getStringExtra(AutopilotScheduler.EXTRA_CONVERSATION_ID)
+        if (!autopilotConvoId.isNullOrBlank()) {
+            chatViewModel.openConversationById(autopilotConvoId)
+            incoming.removeExtra(AutopilotScheduler.EXTRA_CONVERSATION_ID)
+            return
+        }
 
         val widgetAction = incoming.getStringExtra(AuraQuickWidgetProvider.EXTRA_WIDGET_ACTION)
         if (!widgetAction.isNullOrBlank()) {

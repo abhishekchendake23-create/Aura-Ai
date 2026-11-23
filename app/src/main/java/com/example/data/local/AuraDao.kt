@@ -152,4 +152,133 @@ interface AuraDao {
 
     @Query("DELETE FROM knowledge_docs")
     suspend fun deleteAllKnowledgeDocs()
+
+    // Deep Global Search across all chat messages & code blocks
+    @Query(
+        """
+        SELECT m.id AS messageId,
+               m.conversationId AS conversationId,
+               c.title AS conversationTitle,
+               m.role AS role,
+               m.content AS content,
+               m.timestamp AS timestamp
+        FROM messages m
+        INNER JOIN conversations c ON c.id = m.conversationId
+        WHERE m.isError = 0
+          AND m.content LIKE '%' || :query || '%'
+        ORDER BY m.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun searchMessagesWithConversations(query: String, limit: Int = 25): List<MessageSearchHit>
+
+    // Aura Autopilot Background Scheduled Agents
+    @Query("SELECT * FROM autopilot_tasks ORDER BY createdAt DESC")
+    fun observeAutopilotTasks(): Flow<List<AutopilotTaskEntity>>
+
+    @Query("SELECT * FROM autopilot_tasks ORDER BY createdAt DESC")
+    suspend fun getAllAutopilotTasksOnce(): List<AutopilotTaskEntity>
+
+    @Query("SELECT * FROM autopilot_tasks WHERE isEnabled = 1 ORDER BY createdAt DESC")
+    suspend fun getEnabledAutopilotTasksOnce(): List<AutopilotTaskEntity>
+
+    @Query("SELECT * FROM autopilot_tasks WHERE id = :id LIMIT 1")
+    suspend fun getAutopilotTaskById(id: String): AutopilotTaskEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAutopilotTask(task: AutopilotTaskEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAutopilotTasks(tasks: List<AutopilotTaskEntity>)
+
+    @Query("UPDATE autopilot_tasks SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setAutopilotTaskEnabled(id: String, enabled: Boolean)
+
+    @Query("UPDATE autopilot_tasks SET lastRunAt = :lastRunAt, lastResultSummary = :summary, lastConversationId = :convoId WHERE id = :id")
+    suspend fun updateAutopilotTaskRun(id: String, lastRunAt: Long, summary: String, convoId: String)
+
+    @Query("DELETE FROM autopilot_tasks WHERE id = :id")
+    suspend fun deleteAutopilotTask(id: String)
+
+    // Claude-Style Project Workspaces
+    @Query("UPDATE conversations SET projectId = :projectId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateConversationProject(id: String, projectId: String?, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("SELECT * FROM projects ORDER BY updatedAt DESC")
+    fun observeProjects(): Flow<List<ProjectEntity>>
+
+    @Query("SELECT * FROM projects ORDER BY updatedAt DESC")
+    suspend fun getAllProjectsOnce(): List<ProjectEntity>
+
+    @Query("SELECT * FROM projects WHERE id = :id LIMIT 1")
+    suspend fun getProjectById(id: String): ProjectEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertProject(project: ProjectEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertProjects(projects: List<ProjectEntity>)
+
+    @Query("UPDATE conversations SET projectId = NULL WHERE projectId = :projectId")
+    suspend fun clearProjectFromConversations(projectId: String)
+
+    @Query("DELETE FROM projects WHERE id = :id")
+    suspend fun deleteProject(id: String)
+
+    // Versioned Artifact Hub
+    @Query("SELECT * FROM artifacts ORDER BY createdAt DESC")
+    fun observeArtifacts(): Flow<List<ArtifactEntity>>
+
+    @Query("SELECT * FROM artifacts ORDER BY createdAt DESC")
+    suspend fun getAllArtifactsOnce(): List<ArtifactEntity>
+
+    @Query("SELECT MAX(versionNumber) FROM artifacts WHERE title = :title")
+    suspend fun getArtifactMaxVersionForTitle(title: String): Int?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArtifact(artifact: ArtifactEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArtifacts(artifacts: List<ArtifactEntity>)
+
+    @Query("DELETE FROM artifacts WHERE id = :id")
+    suspend fun deleteArtifact(id: String)
+
+    // Reusable AI Studio Prompt Library
+    @Query("SELECT * FROM prompt_templates ORDER BY isBuiltIn ASC, createdAt DESC")
+    fun observePromptTemplates(): Flow<List<PromptTemplateEntity>>
+
+    @Query("SELECT * FROM prompt_templates ORDER BY isBuiltIn ASC, createdAt DESC")
+    suspend fun getAllPromptTemplatesOnce(): List<PromptTemplateEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPromptTemplate(template: PromptTemplateEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPromptTemplates(templates: List<PromptTemplateEntity>)
+
+    @Query("DELETE FROM prompt_templates WHERE id = :id AND isBuiltIn = 0")
+    suspend fun deleteCustomPromptTemplate(id: String)
+
+    // Custom Webhook / REST Tools (MCP-Lite)
+    @Query("SELECT * FROM custom_webhooks ORDER BY createdAt DESC")
+    fun observeCustomWebhooks(): Flow<List<CustomWebhookEntity>>
+
+    @Query("SELECT * FROM custom_webhooks ORDER BY createdAt DESC")
+    suspend fun getAllCustomWebhooksOnce(): List<CustomWebhookEntity>
+
+    @Query("SELECT * FROM custom_webhooks WHERE isEnabled = 1 ORDER BY createdAt DESC")
+    suspend fun getEnabledCustomWebhooksOnce(): List<CustomWebhookEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCustomWebhook(webhook: CustomWebhookEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCustomWebhooks(webhooks: List<CustomWebhookEntity>)
+
+    @Query("UPDATE custom_webhooks SET isEnabled = :enabled WHERE id = :id")
+    suspend fun setCustomWebhookEnabled(id: String, enabled: Boolean)
+
+    @Query("DELETE FROM custom_webhooks WHERE id = :id")
+    suspend fun deleteCustomWebhook(id: String)
 }

@@ -2,13 +2,18 @@ package com.example.data.repository
 
 import android.content.Context
 import android.net.Uri
+import com.example.data.local.ArtifactEntity
 import com.example.data.local.AuraDao
+import com.example.data.local.AutopilotTaskEntity
 import com.example.data.local.ConversationEntity
+import com.example.data.local.CustomWebhookEntity
 import com.example.data.local.KnowledgeChunkEntity
 import com.example.data.local.KnowledgeDocEntity
 import com.example.data.local.MemoryEntity
 import com.example.data.local.MessageEntity
 import com.example.data.local.PersonaEntity
+import com.example.data.local.ProjectEntity
+import com.example.data.local.PromptTemplateEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -54,10 +59,15 @@ class BackupRepository(
         val memories = dao.getAllMemoriesOnce()
         val knowledgeDocs = dao.getAllKnowledgeDocsOnce()
         val knowledgeChunks = dao.getAllKnowledgeChunksOnce()
+        val autopilotTasks = dao.getAllAutopilotTasksOnce()
+        val projects = dao.getAllProjectsOnce()
+        val artifacts = dao.getAllArtifactsOnce()
+        val promptTemplates = dao.getAllPromptTemplatesOnce().filter { !it.isBuiltIn }
+        val customWebhooks = dao.getAllCustomWebhooksOnce()
 
         val root = JSONObject().apply {
             put("app", "Aura AI")
-            put("schemaVersion", 1)
+            put("schemaVersion", 2)
             put("exportedAt", System.currentTimeMillis())
 
             put("conversations", JSONArray().apply {
@@ -70,6 +80,7 @@ class BackupRepository(
                         put("isPinned", c.isPinned)
                         put("createdAt", c.createdAt)
                         put("updatedAt", c.updatedAt)
+                        c.projectId?.let { put("projectId", it) }
                     })
                 }
             })
@@ -149,6 +160,82 @@ class BackupRepository(
                     })
                 }
             })
+
+            put("autopilotTasks", JSONArray().apply {
+                autopilotTasks.forEach { task ->
+                    put(JSONObject().apply {
+                        put("id", task.id)
+                        put("title", task.title)
+                        put("prompt", task.prompt)
+                        put("intervalHours", task.intervalHours)
+                        put("useWebSearch", task.useWebSearch)
+                        put("isEnabled", task.isEnabled)
+                        put("lastRunAt", task.lastRunAt)
+                        put("lastResultSummary", task.lastResultSummary)
+                        task.lastConversationId?.let { put("lastConversationId", it) }
+                        put("createdAt", task.createdAt)
+                    })
+                }
+            })
+
+            put("projects", JSONArray().apply {
+                projects.forEach { p ->
+                    put(JSONObject().apply {
+                        put("id", p.id)
+                        put("name", p.name)
+                        put("description", p.description)
+                        put("customInstructions", p.customInstructions)
+                        put("pinnedUrlsOrNotes", p.pinnedUrlsOrNotes)
+                        put("accentHex", p.accentHex)
+                        put("createdAt", p.createdAt)
+                        put("updatedAt", p.updatedAt)
+                    })
+                }
+            })
+
+            put("artifacts", JSONArray().apply {
+                artifacts.forEach { a ->
+                    put(JSONObject().apply {
+                        put("id", a.id)
+                        put("conversationId", a.conversationId)
+                        put("messageId", a.messageId)
+                        put("title", a.title)
+                        put("language", a.language)
+                        put("code", a.code)
+                        put("versionNumber", a.versionNumber)
+                        put("createdAt", a.createdAt)
+                    })
+                }
+            })
+
+            put("promptTemplates", JSONArray().apply {
+                promptTemplates.forEach { t ->
+                    put(JSONObject().apply {
+                        put("id", t.id)
+                        put("title", t.title)
+                        put("category", t.category)
+                        put("systemPrompt", t.systemPrompt)
+                        put("userTemplate", t.userTemplate)
+                        put("createdAt", t.createdAt)
+                    })
+                }
+            })
+
+            put("customWebhooks", JSONArray().apply {
+                customWebhooks.forEach { w ->
+                    put(JSONObject().apply {
+                        put("id", w.id)
+                        put("name", w.name)
+                        put("description", w.description)
+                        put("endpointUrl", w.endpointUrl)
+                        put("httpMethod", w.httpMethod)
+                        put("headersJson", w.headersJson)
+                        put("bodyTemplate", w.bodyTemplate)
+                        put("isEnabled", w.isEnabled)
+                        put("createdAt", w.createdAt)
+                    })
+                }
+            })
         }
 
         val stats = BackupStats(
@@ -180,7 +267,8 @@ class BackupRepository(
                         personaId = obj.optString("personaId", "persona_general"),
                         isPinned = obj.optBoolean("isPinned", false),
                         createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
-                        updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
+                        updatedAt = obj.optLong("updatedAt", System.currentTimeMillis()),
+                        projectId = obj.optString("projectId").takeIf { it.isNotBlank() && obj.has("projectId") }
                     )
                 )
             }
@@ -306,6 +394,119 @@ class BackupRepository(
         if (importedChunks.isNotEmpty()) {
             dao.upsertKnowledgeChunks(importedChunks)
         }
+
+        val tasksArray = root.optJSONArray("autopilotTasks") ?: JSONArray()
+        val importedTasks = buildList {
+            for (i in 0 until tasksArray.length()) {
+                val obj = tasksArray.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val title = obj.optString("title").takeIf { it.isNotBlank() } ?: continue
+                val prompt = obj.optString("prompt").takeIf { it.isNotBlank() } ?: continue
+                add(
+                    AutopilotTaskEntity(
+                        id = id,
+                        title = title,
+                        prompt = prompt,
+                        intervalHours = obj.optInt("intervalHours", 24),
+                        useWebSearch = obj.optBoolean("useWebSearch", true),
+                        isEnabled = obj.optBoolean("isEnabled", true),
+                        lastRunAt = obj.optLong("lastRunAt", 0L),
+                        lastResultSummary = obj.optString("lastResultSummary", ""),
+                        lastConversationId = obj.optString("lastConversationId").takeIf { it.isNotBlank() && obj.has("lastConversationId") },
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        if (importedTasks.isNotEmpty()) {
+            dao.upsertAutopilotTasks(importedTasks)
+        }
+
+        val projectsArray = root.optJSONArray("projects") ?: JSONArray()
+        val importedProjects = buildList {
+            for (i in 0 until projectsArray.length()) {
+                val obj = projectsArray.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                add(
+                    ProjectEntity(
+                        id = id,
+                        name = obj.optString("name", "Workspace"),
+                        description = obj.optString("description", ""),
+                        customInstructions = obj.optString("customInstructions", ""),
+                        pinnedUrlsOrNotes = obj.optString("pinnedUrlsOrNotes", ""),
+                        accentHex = obj.optString("accentHex", "#7AA2FF"),
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+                        updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        if (importedProjects.isNotEmpty()) dao.upsertProjects(importedProjects)
+
+        val artifactsArray = root.optJSONArray("artifacts") ?: JSONArray()
+        val importedArtifacts = buildList {
+            for (i in 0 until artifactsArray.length()) {
+                val obj = artifactsArray.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                add(
+                    ArtifactEntity(
+                        id = id,
+                        conversationId = obj.optString("conversationId", ""),
+                        messageId = obj.optString("messageId", ""),
+                        title = obj.optString("title", "Artifact"),
+                        language = obj.optString("language", "html"),
+                        code = obj.optString("code", ""),
+                        versionNumber = obj.optInt("versionNumber", 1),
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        if (importedArtifacts.isNotEmpty()) dao.upsertArtifacts(importedArtifacts)
+
+        val templatesArray = root.optJSONArray("promptTemplates") ?: JSONArray()
+        val importedTemplates = buildList {
+            for (i in 0 until templatesArray.length()) {
+                val obj = templatesArray.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val userTemplate = obj.optString("userTemplate").takeIf { it.isNotBlank() } ?: continue
+                add(
+                    PromptTemplateEntity(
+                        id = id,
+                        title = obj.optString("title", "Custom Prompt"),
+                        category = obj.optString("category", "Custom"),
+                        systemPrompt = obj.optString("systemPrompt", ""),
+                        userTemplate = userTemplate,
+                        isBuiltIn = false,
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        if (importedTemplates.isNotEmpty()) dao.upsertPromptTemplates(importedTemplates)
+
+        val webhooksArray = root.optJSONArray("customWebhooks") ?: JSONArray()
+        val importedWebhooks = buildList {
+            for (i in 0 until webhooksArray.length()) {
+                val obj = webhooksArray.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val url = obj.optString("endpointUrl").takeIf { it.isNotBlank() } ?: continue
+                add(
+                    CustomWebhookEntity(
+                        id = id,
+                        name = obj.optString("name", "Custom Tool"),
+                        description = obj.optString("description", ""),
+                        endpointUrl = url,
+                        httpMethod = obj.optString("httpMethod", "GET"),
+                        headersJson = obj.optString("headersJson", ""),
+                        bodyTemplate = obj.optString("bodyTemplate", ""),
+                        isEnabled = obj.optBoolean("isEnabled", true),
+                        createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        if (importedWebhooks.isNotEmpty()) dao.upsertCustomWebhooks(importedWebhooks)
 
         return BackupStats(
             conversations = importedConversations.size,

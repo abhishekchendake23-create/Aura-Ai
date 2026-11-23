@@ -24,7 +24,7 @@ object ProjectZipReader {
     private val SUPPORTED_EXTENSIONS = setOf(
         "kt", "kts", "java", "py", "ts", "tsx", "js", "jsx", "mjs", "cjs",
         "html", "htm", "css", "scss", "svg", "xml", "json", "yaml", "yml",
-        "toml", "gradle", "properties", "md", "txt", "csv", "sql", "sh",
+        "toml", "gradle", "properties", "md", "txt", "csv", "tsv", "sql", "sh",
         "c", "h", "cpp", "hpp", "rs", "go", "dart", "swift", "rb", "php",
         "env", "gitignore", "dockerfile", "diff", "patch"
     )
@@ -151,7 +151,13 @@ object ProjectZipReader {
         sb.append("\n")
 
         for ((path, content) in files) {
-            val block = "// File: $path\n$content\n\n"
+            val csvSummary = summarizeCsvIfApplicable(path, content)
+            val block = buildString {
+                if (csvSummary != null) {
+                    append(csvSummary).append("\n")
+                }
+                append("// File: ").append(path).append("\n").append(content).append("\n\n")
+            }
             if (sb.length + block.length > MAX_TOTAL_CONTEXT_CHARS) {
                 val remaining = MAX_TOTAL_CONTEXT_CHARS - sb.length
                 if (remaining > 180) {
@@ -162,6 +168,56 @@ object ProjectZipReader {
             sb.append(block)
         }
         return sb.toString().trim()
+    }
+
+    fun summarizeCsvIfApplicable(fileName: String, content: String): String? {
+        val lower = fileName.trim().lowercase()
+        val isTsv = lower.endsWith(".tsv")
+        if (!lower.endsWith(".csv") && !isTsv) return null
+        val lines = content.lines().map { it.trim() }.filter { it.isNotBlank() }
+        if (lines.size < 2) return null
+        val delimiter = if (isTsv) '\t' else ','
+        val headers = splitCsvRow(lines.first(), delimiter)
+        val dataRows = lines.drop(1).map { splitCsvRow(it, delimiter) }
+        val numericStats = buildList {
+            headers.forEachIndexed { colIdx, colName ->
+                val nums = dataRows.mapNotNull { row ->
+                    row.getOrNull(colIdx)?.replace(",", "")?.toDoubleOrNull()
+                }
+                if (nums.size >= 2) {
+                    val min = nums.min()
+                    val max = nums.max()
+                    val avg = nums.average()
+                    add("$colName (n=${nums.size}, min=%.2f, max=%.2f, avg=%.2f)".format(java.util.Locale.US, min, max, avg))
+                }
+            }
+        }
+        return buildString {
+            append("[CSV Analytics Pre-Summary for ").append(fileName).append("]\n")
+            append("- Columns (${headers.size}): ${headers.joinToString(", ")}\n")
+            append("- Total Data Rows Parsed: ${dataRows.size}\n")
+            if (numericStats.isNotEmpty()) {
+                append("- Numeric Columns: ${numericStats.joinToString(" | ")}\n")
+            }
+        }.trim()
+    }
+
+    private fun splitCsvRow(line: String, delimiter: Char): List<String> {
+        val out = mutableListOf<String>()
+        val cur = StringBuilder()
+        var inQuotes = false
+        for (ch in line) {
+            when {
+                ch == '"' -> inQuotes = !inQuotes
+                ch == delimiter && !inQuotes -> {
+                    out += cur.toString().trim()
+                    cur.clear()
+                }
+                else -> cur.append(ch)
+            }
+        }
+        out += cur.toString().trim()
+        return out
     }
 
     private fun readBoundedUtf8Text(stream: InputStream, maxChars: Int): String {

@@ -71,6 +71,25 @@ object AuraPdfExporter {
         return uri to cleanName
     }
 
+    fun exportHtmlFileUri(
+        context: Context,
+        htmlContent: String,
+        suggestedTitle: String = "aura_artifact"
+    ): Pair<Uri, String> {
+        val dir = File(context.cacheDir, "exports").apply { if (!exists()) mkdirs() }
+        val base = suggestedTitle
+            .lowercase()
+            .replace(Regex("[^a-z0-9._-]"), "_")
+            .trim('_')
+            .take(42)
+            .ifBlank { "aura_artifact" }
+        val cleanName = if (base.endsWith(".html")) base else "${base}_${System.currentTimeMillis() % 10000}.html"
+        val file = File(dir, cleanName)
+        file.writeText(htmlContent, Charsets.UTF_8)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        return uri to cleanName
+    }
+
     fun createPdfFile(
         context: Context,
         fileName: String,

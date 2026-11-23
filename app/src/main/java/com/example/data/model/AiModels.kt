@@ -268,6 +268,34 @@ enum class CapabilityMode(
     }
 }
 
+enum class ThinkingBudgetMode(val id: String, val label: String, val tokenBudget: Int?) {
+    AUTO("AUTO", "Auto", null),
+    OFF("OFF", "Off", 0),
+    LIGHT("LIGHT", "Light", 2048),
+    DEEP("DEEP", "Deep", 12288);
+
+    companion object {
+        fun fromId(id: String): ThinkingBudgetMode = entries.find { it.id == id } ?: AUTO
+    }
+}
+
+data class WorkbenchConfig(
+    val temperature: Float = 0.7f,
+    val topP: Float = 0.95f,
+    val maxOutputTokens: Int = 8192,
+    val thinkingBudgetMode: ThinkingBudgetMode = ThinkingBudgetMode.AUTO,
+    val jsonSchemaMode: Boolean = false,
+    val jsonSchemaText: String = "",
+    val systemInstructionOverride: String = ""
+)
+
+val AURA_JSON_SCHEMA_PRESETS: List<Pair<String, String>> = listOf(
+    "API Spec" to """{"endpoint": "string", "method": "GET|POST", "auth": "string", "requestSchema": {}, "responseSchema": {}, "errorCodes": []}""",
+    "Decision Matrix" to """{"topic": "string", "winner": "string", "criteria": [], "options": [{"name": "string", "score": 0, "pros": [], "cons": []}]}""",
+    "Study Flashcards" to """{"topic": "string", "cards": [{"question": "string", "answer": "string", "difficulty": "easy|medium|hard"}]}""",
+    "Action Plan" to """{"goal": "string", "milestones": [{"step": 1, "title": "string", "owner": "string", "deliverable": "string", "risk": "string"}]}"""
+)
+
 enum class VoiceTone(val label: String) {
     ALL("All (30)"),
     WARM("Warm"),
@@ -444,6 +472,28 @@ val AURA_SLASH_COMMANDS = listOf(
         subtitle = "Crisp natural Marathi explanation with examples",
         promptPrefix = "Explain clearly in crisp, natural Marathi (or Romanized Marathi matching my style) with practical examples:\n",
         suggestedMode = CapabilityMode.STANDARD
+    ),
+    SlashCommand(
+        trigger = "/agent",
+        title = "Manus Autonomous Agent",
+        subtitle = "Multi-step plan -> Web/URL -> Quantitative -> Deliverable",
+        promptPrefix = "Run an autonomous multi-step agent workflow (plan steps, verify live facts & calculations, and deliver the final complete solution) for:\n",
+        suggestedMode = CapabilityMode.DEEP_THINK,
+        requiresWeb = true
+    ),
+    SlashCommand(
+        trigger = "/slides",
+        title = "Interactive Slide Deck",
+        subtitle = "AMOLED slide deck with Next/Prev navigation in Sandbox",
+        promptPrefix = "Create an executive presentation formatted inside a ```slides code block separated by `---` (use # Titles, crisp bullets, and stats for 5–7 slides) about:\n",
+        suggestedMode = CapabilityMode.STANDARD
+    ),
+    SlashCommand(
+        trigger = "/csv",
+        title = "CSV Dataset & Chart Studio",
+        subtitle = "Interactive sortable table + live bar chart in Sandbox",
+        promptPrefix = "Output clean CSV data inside a ```csv code block (header row + crisp numeric metrics) ready for interactive table & bar chart preview for:\n",
+        suggestedMode = CapabilityMode.CODE_ARCHITECT
     )
 )
 

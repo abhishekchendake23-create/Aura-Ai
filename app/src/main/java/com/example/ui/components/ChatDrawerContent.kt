@@ -1,7 +1,9 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,16 +30,20 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.FolderShared
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -64,18 +71,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.ConversationEntity
+import com.example.data.local.MessageSearchHit
+import com.example.data.local.ProjectEntity
 
 @Composable
 fun ChatDrawerContent(
     conversations: List<ConversationEntity>,
+    messageSearchHits: List<MessageSearchHit> = emptyList(),
+    projects: List<ProjectEntity> = emptyList(),
+    activeProjectId: String? = null,
     activeConversationId: String?,
     searchQuery: String,
     bookmarkCount: Int,
     memoryCount: Int = 0,
     vaultDocCount: Int = 0,
+    autopilotCount: Int = 0,
+    artifactCount: Int = 0,
+    webhookCount: Int = 0,
     onSearchQueryChange: (String) -> Unit,
+    onSelectActiveProject: (String?) -> Unit = {},
     onNewChat: () -> Unit,
     onSelectConversation: (ConversationEntity) -> Unit,
+    onSelectSearchHit: (MessageSearchHit) -> Unit = {},
     onTogglePin: (ConversationEntity) -> Unit,
     onRenameConversation: (String, String) -> Unit,
     onDeleteConversation: (String) -> Unit,
@@ -85,6 +102,11 @@ fun ChatDrawerContent(
     onOpenScanner: () -> Unit = {},
     onOpenKnowledgeVault: () -> Unit = {},
     onOpenMemoryVault: () -> Unit = {},
+    onOpenAutopilot: () -> Unit = {},
+    onOpenProjects: () -> Unit = {},
+    onOpenArtifactHub: () -> Unit = {},
+    onOpenWorkbench: () -> Unit = {},
+    onOpenWebhooks: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -156,7 +178,7 @@ fun ChatDrawerContent(
                 onValueChange = onSearchQueryChange,
                 placeholder = {
                     Text(
-                        "Search chats...",
+                        "Search chats, code & messages...",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 },
@@ -185,7 +207,106 @@ fun ChatDrawerContent(
                     .testTag("drawer_search_input")
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Project Workspaces horizontal filter strip
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (activeProjectId == null) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .border(
+                            1.dp,
+                            if (activeProjectId == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onSelectActiveProject(null) }
+                        .testTag("drawer_project_all")
+                ) {
+                    Text(
+                        text = "All Chats",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (activeProjectId == null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+                projects.forEach { proj ->
+                    val selected = proj.id == activeProjectId
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onSelectActiveProject(proj.id) }
+                            .testTag("drawer_project_${proj.id}")
+                    ) {
+                        Text(
+                            text = proj.name,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                        .clickable(onClick = onOpenProjects)
+                        .testTag("drawer_projects_manage")
+                ) {
+                    Text(
+                        text = "+ Projects",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Compact Studio & Power-Up Action Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                DrawerMiniChip(
+                    icon = Icons.Rounded.Code,
+                    label = if (artifactCount > 0) "Artifacts ($artifactCount)" else "Artifacts",
+                    onClick = onOpenArtifactHub,
+                    modifier = Modifier.weight(1f).testTag("drawer_artifact_hub")
+                )
+                DrawerMiniChip(
+                    icon = Icons.Rounded.Tune,
+                    label = "Workbench",
+                    onClick = onOpenWorkbench,
+                    modifier = Modifier.weight(1f).testTag("drawer_workbench")
+                )
+                DrawerMiniChip(
+                    icon = Icons.Rounded.Public,
+                    label = if (webhookCount > 0) "Tools ($webhookCount)" else "REST Tools",
+                    onClick = onOpenWebhooks,
+                    modifier = Modifier.weight(1f).testTag("drawer_webhooks")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             DrawerNavShortcut(
                 icon = Icons.Rounded.GraphicEq,
@@ -234,17 +355,25 @@ fun ChatDrawerContent(
                 onClick = onOpenMemoryVault,
                 tag = "drawer_memory_vault"
             )
+            Spacer(modifier = Modifier.height(4.dp))
+            DrawerNavShortcut(
+                icon = Icons.Rounded.Bolt,
+                title = "Aura Autopilot",
+                subtitle = if (autopilotCount > 0) "$autopilotCount active brief schedule(s)" else "Scheduled autonomous briefings",
+                onClick = onOpenAutopilot,
+                tag = "drawer_autopilot"
+            )
 
             HorizontalDivider(
                 color = MaterialTheme.colorScheme.outlineVariant,
-                modifier = Modifier.padding(vertical = 12.dp)
+                modifier = Modifier.padding(vertical = 10.dp)
             )
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                if (conversations.isEmpty()) {
+                if (conversations.isEmpty() && messageSearchHits.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier
@@ -254,11 +383,50 @@ fun ChatDrawerContent(
                         ) {
                             Text(
                                 text = if (searchQuery.isBlank()) "No chats yet.\nAsk Aura AI anything."
-                                else "No matching chats.",
+                                else "No matching chats or code.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+                }
+
+                if (searchQuery.isNotBlank() && messageSearchHits.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "CHAT & CODE MATCHES (${messageSearchHits.size})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+                    items(messageSearchHits, key = { "hit_${it.messageId}" }) { hit ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainer)
+                                .clickable { onSelectSearchHit(hit) }
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                .testTag("drawer_search_hit_${hit.messageId}"),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = hit.conversationTitle,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = hit.content.replace(Regex("\\s+"), " ").trim().take(90),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
                 }
 
@@ -385,6 +553,42 @@ fun ChatDrawerContent(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun DrawerMiniChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(17.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
     }
 }
 

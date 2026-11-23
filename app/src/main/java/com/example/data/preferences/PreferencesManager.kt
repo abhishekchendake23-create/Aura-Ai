@@ -5,6 +5,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.BuildConfig
@@ -39,6 +41,17 @@ class PreferencesManager(private val context: Context) {
         val VAULT_RAG_ENABLED = booleanPreferencesKey("vault_rag_enabled")
         val SELF_VERIFY_ENABLED = booleanPreferencesKey("self_verify_enabled")
         val LIVE_VOICE_READOUT_ENABLED = booleanPreferencesKey("live_voice_readout_enabled")
+        val COUNCIL_MODE_ENABLED = booleanPreferencesKey("council_mode_enabled")
+        val WORKBENCH_TEMPERATURE = floatPreferencesKey("workbench_temperature")
+        val WORKBENCH_TOP_P = floatPreferencesKey("workbench_top_p")
+        val WORKBENCH_MAX_TOKENS = intPreferencesKey("workbench_max_tokens")
+        val WORKBENCH_THINKING_BUDGET = stringPreferencesKey("workbench_thinking_budget")
+        val JSON_SCHEMA_MODE = booleanPreferencesKey("json_schema_mode")
+        val JSON_SCHEMA_TEXT = stringPreferencesKey("json_schema_text")
+        val SYSTEM_INSTRUCTION_OVERRIDE = stringPreferencesKey("system_instruction_override")
+        val ACTIVE_PROJECT_ID = stringPreferencesKey("active_project_id")
+        val AUTONOMOUS_AGENT_ENABLED = booleanPreferencesKey("autonomous_agent_enabled")
+        val COMPARE_ARENA_ENABLED = booleanPreferencesKey("compare_arena_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.auraDataStore.data.map { prefs ->
@@ -112,6 +125,50 @@ class PreferencesManager(private val context: Context) {
 
     val liveVoiceReadoutEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
         prefs[Keys.LIVE_VOICE_READOUT_ENABLED] ?: false
+    }
+
+    val councilModeEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.COUNCIL_MODE_ENABLED] ?: false
+    }
+
+    val workbenchTemperature: Flow<Float> = context.auraDataStore.data.map { prefs ->
+        (prefs[Keys.WORKBENCH_TEMPERATURE] ?: 0.7f).coerceIn(0f, 1.5f)
+    }
+
+    val workbenchTopP: Flow<Float> = context.auraDataStore.data.map { prefs ->
+        (prefs[Keys.WORKBENCH_TOP_P] ?: 0.95f).coerceIn(0.1f, 1.0f)
+    }
+
+    val workbenchMaxTokens: Flow<Int> = context.auraDataStore.data.map { prefs ->
+        (prefs[Keys.WORKBENCH_MAX_TOKENS] ?: 8192).coerceIn(512, 65536)
+    }
+
+    val workbenchThinkingBudget: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.WORKBENCH_THINKING_BUDGET] ?: "AUTO"
+    }
+
+    val jsonSchemaMode: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.JSON_SCHEMA_MODE] ?: false
+    }
+
+    val jsonSchemaText: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.JSON_SCHEMA_TEXT].orEmpty()
+    }
+
+    val systemInstructionOverride: Flow<String> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.SYSTEM_INSTRUCTION_OVERRIDE].orEmpty()
+    }
+
+    val activeProjectId: Flow<String?> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.ACTIVE_PROJECT_ID]?.takeIf { it.isNotBlank() }
+    }
+
+    val autonomousAgentEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.AUTONOMOUS_AGENT_ENABLED] ?: false
+    }
+
+    val compareArenaEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.COMPARE_ARENA_ENABLED] ?: false
     }
 
     suspend fun getEffectiveApiKeyPool(): List<String> =
@@ -240,6 +297,66 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setLiveVoiceReadoutEnabled(enabled: Boolean) {
         context.auraDataStore.edit { it[Keys.LIVE_VOICE_READOUT_ENABLED] = enabled }
+    }
+
+    suspend fun setCouncilModeEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.COUNCIL_MODE_ENABLED] = enabled }
+    }
+
+    suspend fun setWorkbenchTemperature(value: Float) {
+        context.auraDataStore.edit { it[Keys.WORKBENCH_TEMPERATURE] = value.coerceIn(0f, 1.5f) }
+    }
+
+    suspend fun setWorkbenchTopP(value: Float) {
+        context.auraDataStore.edit { it[Keys.WORKBENCH_TOP_P] = value.coerceIn(0.1f, 1.0f) }
+    }
+
+    suspend fun setWorkbenchMaxTokens(value: Int) {
+        context.auraDataStore.edit { it[Keys.WORKBENCH_MAX_TOKENS] = value.coerceIn(512, 65536) }
+    }
+
+    suspend fun setWorkbenchThinkingBudget(mode: String) {
+        val cleaned = if (mode in setOf("AUTO", "OFF", "LIGHT", "DEEP")) mode else "AUTO"
+        context.auraDataStore.edit { it[Keys.WORKBENCH_THINKING_BUDGET] = cleaned }
+    }
+
+    suspend fun setJsonSchemaMode(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.JSON_SCHEMA_MODE] = enabled }
+    }
+
+    suspend fun setJsonSchemaText(schema: String) {
+        context.auraDataStore.edit { it[Keys.JSON_SCHEMA_TEXT] = schema.trim() }
+    }
+
+    suspend fun setSystemInstructionOverride(text: String) {
+        context.auraDataStore.edit { it[Keys.SYSTEM_INSTRUCTION_OVERRIDE] = text }
+    }
+
+    suspend fun resetWorkbenchTuning() {
+        context.auraDataStore.edit { prefs ->
+            prefs.remove(Keys.WORKBENCH_TEMPERATURE)
+            prefs.remove(Keys.WORKBENCH_TOP_P)
+            prefs.remove(Keys.WORKBENCH_MAX_TOKENS)
+            prefs.remove(Keys.WORKBENCH_THINKING_BUDGET)
+            prefs.remove(Keys.JSON_SCHEMA_MODE)
+            prefs.remove(Keys.JSON_SCHEMA_TEXT)
+            prefs.remove(Keys.SYSTEM_INSTRUCTION_OVERRIDE)
+        }
+    }
+
+    suspend fun setActiveProjectId(projectId: String?) {
+        context.auraDataStore.edit { prefs ->
+            if (projectId.isNullOrBlank()) prefs.remove(Keys.ACTIVE_PROJECT_ID)
+            else prefs[Keys.ACTIVE_PROJECT_ID] = projectId
+        }
+    }
+
+    suspend fun setAutonomousAgentEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.AUTONOMOUS_AGENT_ENABLED] = enabled }
+    }
+
+    suspend fun setCompareArenaEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.COMPARE_ARENA_ENABLED] = enabled }
     }
 
     companion object {

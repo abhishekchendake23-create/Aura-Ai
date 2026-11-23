@@ -7,13 +7,19 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.ArtifactEntity
 import com.example.data.local.AuraDatabase
+import com.example.data.local.AutopilotTaskEntity
 import com.example.data.local.ConversationEntity
+import com.example.data.local.CustomWebhookEntity
 import com.example.data.local.KnowledgeDocEntity
 import com.example.data.local.MemoryEntity
 import com.example.data.local.MessageEntity
+import com.example.data.local.MessageSearchHit
 import com.example.data.local.MessageVariant
 import com.example.data.local.PersonaEntity
+import com.example.data.local.ProjectEntity
+import com.example.data.local.PromptTemplateEntity
 import com.example.data.local.parseMessageVariants
 import com.example.data.local.serializeMessageVariants
 import com.example.data.model.ALL_30_VOICE_CHARACTERS
@@ -25,6 +31,8 @@ import com.example.data.model.CapabilityMode
 import com.example.data.model.SlashCommand
 import com.example.data.model.SlashCommandSpecialAction
 import com.example.data.model.ThemeMode
+import com.example.data.model.ThinkingBudgetMode
+import com.example.data.model.WorkbenchConfig
 import com.example.data.preferences.PreferencesManager
 import com.example.data.repository.AiRepository
 import com.example.data.repository.AiRequest
@@ -36,17 +44,23 @@ import com.example.data.repository.KnowledgeRagEngine
 import com.example.data.repository.LiveVoiceManager
 import com.example.data.repository.LiveVoiceStatus
 import com.example.data.repository.ProjectZipReader
+import com.example.data.repository.WebhookExecutionResult
 import com.example.data.repository.serializeSources
+import com.example.service.AutopilotRunner
+import com.example.service.AutopilotScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,10 +84,13 @@ data class StreamingMessageState(
     val modelDisplayName: String,
     val activeSwitchNote: String? = null,
     val isThinkingPhase: Boolean,
-    val isGeneratingImage: Boolean = false
+    val isGeneratingImage: Boolean = false,
+    val compareAlphaText: String = "",
+    val compareBetaText: String = "",
+    val isCompareArena: Boolean = false
 )
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AuraDatabase.getInstance(application)
@@ -131,6 +148,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _openMemoryTrigger = MutableStateFlow(false)
     val openMemoryTrigger: StateFlow<Boolean> = _openMemoryTrigger.asStateFlow()
 
+    private val _runningAutopilotTaskId = MutableStateFlow<String?>(null)
+    val runningAutopilotTaskId: StateFlow<String?> = _runningAutopilotTaskId.asStateFlow()
+
     private var activeGenerationJob: Job? = null
     private var liveVoiceJob: Job? = null
     private var tts: TextToSpeech? = null
@@ -170,6 +190,56 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = false
+    )
+
+    val councilModeEnabled: StateFlow<Boolean> = prefs.councilModeEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    val autonomousAgentEnabled: StateFlow<Boolean> = prefs.autonomousAgentEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    val compareArenaEnabled: StateFlow<Boolean> = prefs.compareArenaEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    val workbenchConfig: StateFlow<WorkbenchConfig> = combine(
+        combine(
+            prefs.workbenchTemperature,
+            prefs.workbenchTopP,
+            prefs.workbenchMaxTokens,
+            prefs.workbenchThinkingBudget
+        ) { temp, topP, maxTokens, budget ->
+            Triple(temp, topP, maxTokens to ThinkingBudgetMode.fromId(budget))
+        },
+        combine(
+            prefs.jsonSchemaMode,
+            prefs.jsonSchemaText,
+            prefs.systemInstructionOverride
+        ) { schemaMode, schemaText, sysOverride ->
+            Triple(schemaMode, schemaText, sysOverride)
+        }
+    ) { firstPart, secondPart ->
+        WorkbenchConfig(
+            temperature = firstPart.first,
+            topP = firstPart.second,
+            maxOutputTokens = firstPart.third.first,
+            thinkingBudgetMode = firstPart.third.second,
+            jsonSchemaMode = secondPart.first,
+            jsonSchemaText = secondPart.second,
+            systemInstructionOverride = secondPart.third
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = WorkbenchConfig()
     )
 
     val liveVoiceReadoutEnabled: StateFlow<Boolean> = prefs.liveVoiceReadoutEnabled.stateIn(
@@ -317,10 +387,57 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = null
     )
 
+    val projects: StateFlow<List<ProjectEntity>> = chatRepository.observeProjects().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val activeProjectId: StateFlow<String?> = prefs.activeProjectId.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
+    val activeProject: StateFlow<ProjectEntity?> = combine(projects, activeProjectId) { list, id ->
+        if (id.isNullOrBlank()) null else list.find { it.id == id }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
+    val artifacts: StateFlow<List<ArtifactEntity>> = chatRepository.observeArtifacts().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val promptTemplates: StateFlow<List<PromptTemplateEntity>> = chatRepository.observePromptTemplates().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val customWebhooks: StateFlow<List<CustomWebhookEntity>> = chatRepository.observeCustomWebhooks().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     val conversations: StateFlow<List<ConversationEntity>> =
-        combine(chatRepository.observeConversations(), _searchQuery) { list, query ->
-            if (query.isBlank()) list
-            else list.filter { it.title.contains(query.trim(), ignoreCase = true) }
+        combine(
+            chatRepository.observeConversations(),
+            _searchQuery,
+            prefs.activeProjectId
+        ) { list, query, projId ->
+            val projectFiltered = if (projId.isNullOrBlank()) {
+                list
+            } else {
+                list.filter { it.projectId == projId }
+            }
+            if (query.isBlank()) projectFiltered
+            else projectFiltered.filter { it.title.contains(query.trim(), ignoreCase = true) }
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -362,9 +479,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
+    val autopilotTasks: StateFlow<List<AutopilotTaskEntity>> = chatRepository.observeAutopilotTasks().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val messageSearchHits: StateFlow<List<MessageSearchHit>> = _searchQuery
+        .debounce(220L)
+        .mapLatest { q ->
+            if (q.trim().length < 2) emptyList()
+            else withContext(Dispatchers.IO) { chatRepository.searchAllMessages(q) }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
     init {
         viewModelScope.launch {
             chatRepository.ensureDefaultPersonas()
+            chatRepository.ensureDefaultPromptTemplates()
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val enabledTasks = database.auraDao().getEnabledAutopilotTasksOnce()
+                    AutopilotScheduler.syncSchedules(getApplication(), enabledTasks)
+                }
+            }
         }
         initTts(application)
     }
@@ -625,6 +767,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleCouncilMode() {
+        viewModelScope.launch {
+            val next = !councilModeEnabled.value
+            prefs.setCouncilModeEnabled(next)
+            _bannerMessage.value = if (next) {
+                "Aura Council 3x ON — 3 parallel specialists + Judge synthesis"
+            } else {
+                "Aura Council 3x OFF"
+            }
+        }
+    }
+
     fun toggleLiveVoiceReadout() {
         viewModelScope.launch {
             val next = !liveVoiceReadoutEnabled.value
@@ -690,6 +844,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             prefs.setDefaultCapability(command.suggestedMode)
+            if (command.trigger == "/agent") {
+                prefs.setAutonomousAgentEnabled(true)
+            }
             if (command.requiresWeb) {
                 prefs.setWebSearchEnabled(true)
                 prefs.setCodeExecutionEnabled(false)
@@ -874,7 +1031,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val created = chatRepository.createConversation(
                     title = buildConversationTitle(effectivePrompt),
                     modelId = model.id,
-                    personaId = persona?.id ?: "persona_general"
+                    personaId = persona?.id ?: "persona_general",
+                    projectId = activeProjectId.value
                 )
                 _activeConversationId.value = created.id
                 created.id
@@ -936,6 +1094,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun switchAssistantVariant(message: MessageEntity, targetIndex: Int) {
         viewModelScope.launch {
             chatRepository.selectAssistantVariant(message, targetIndex)
+        }
+    }
+
+    fun lockArenaWinner(message: MessageEntity, targetIndex: Int) {
+        viewModelScope.launch {
+            chatRepository.selectAssistantVariant(message, targetIndex, lockAsFinal = true)
+            _bannerMessage.value = "Locked winning response to thread history"
+        }
+    }
+
+    fun forkConversationFromMessage(message: MessageEntity) {
+        stopGeneration()
+        stopSpeaking()
+        viewModelScope.launch {
+            val forked = chatRepository.forkConversationFromMessage(
+                sourceConversationId = message.conversationId,
+                upToMessageId = message.id
+            )
+            if (forked != null) {
+                _activeConversationId.value = forked.id
+                _destination.value = AppDestination.Chat
+                _bannerMessage.value = "Branched new thread: ${forked.title}"
+            } else {
+                _bannerMessage.value = "Could not branch conversation"
+            }
         }
     }
 
@@ -1048,7 +1231,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         fallbackPreviousMessage: MessageEntity? = null
     ) {
         val assistantMsgId = targetMessageId ?: UUID.randomUUID().toString()
-        val auraHeaderLabel = if (model.isImageModel) "Aura Imagine" else "Aura AI"
+        val isArenaActive = compareArenaEnabled.value && !model.isImageModel
+        val isAgentActive = autonomousAgentEnabled.value && !model.isImageModel
+        val auraHeaderLabel = when {
+            model.isImageModel -> "Aura Imagine"
+            isArenaActive -> "Aura Arena"
+            else -> "Aura AI"
+        }
         _streamingState.value = StreamingMessageState(
             messageId = assistantMsgId,
             conversationId = conversationId,
@@ -1061,12 +1250,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 capability == CapabilityMode.DEEP_THINK ||
                     capability == CapabilityMode.CODE_ARCHITECT ||
                     model.isDeepSeekTier ||
-                    selfVerifyEnabled.value
+                    selfVerifyEnabled.value ||
+                    councilModeEnabled.value ||
+                    isAgentActive
                 ),
-            isGeneratingImage = model.isImageModel
+            isGeneratingImage = model.isImageModel,
+            isCompareArena = isArenaActive
         )
 
-        val liveReadoutActive = liveVoiceReadoutEnabled.value && !model.isImageModel && isTtsReady
+        val liveReadoutActive = liveVoiceReadoutEnabled.value && !model.isImageModel && isTtsReady && !isArenaActive
         var spokenCursor = 0
 
         val activeMemories = chatRepository.getActiveMemoriesOnce()
@@ -1078,6 +1270,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             KnowledgeRagEngine.retrieveTopChunks(prompt, allChunks, topK = 4)
         } else {
             emptyList()
+        }
+
+        val resolvedProject = activeProject.value ?: run {
+            val convoProjId = chatRepository.getConversation(conversationId)?.projectId
+            if (!convoProjId.isNullOrBlank()) chatRepository.getProjectById(convoProjId) else null
+        }
+        val projectContextBlock = resolvedProject?.let { proj ->
+            buildString {
+                append("### PROJECT WORKSPACE: ${proj.name}\n")
+                if (proj.customInstructions.isNotBlank()) {
+                    append("Workspace Instructions:\n${proj.customInstructions}\n")
+                }
+                if (proj.pinnedUrlsOrNotes.isNotBlank()) {
+                    append("Pinned Reference URLs / Notes:\n${proj.pinnedUrlsOrNotes}\n")
+                }
+            }.trim()
+        }.orEmpty()
+
+        val enabledHooks = if (!model.isImageModel) {
+            chatRepository.getEnabledWebhooksOnce()
+        } else {
+            emptyList()
+        }
+        val (webhookLogPrefix, webhookContextBlock) = if (enabledHooks.isNotEmpty()) {
+            aiRepository.executeEnabledWebhooks(prompt, enabledHooks)
+        } else {
+            "" to ""
         }
 
         val request = AiRequest(
@@ -1096,7 +1315,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             vaultContextSnippets = vaultChunks,
             useWebSearch = (webSearchEnabled.value || capability == CapabilityMode.DEEP_RESEARCH) && !model.isImageModel,
             useCodeExecution = codeExecutionEnabled.value && !model.isImageModel && capability != CapabilityMode.DEEP_RESEARCH,
-            enableSelfVerify = selfVerifyEnabled.value && !model.isImageModel
+            enableSelfVerify = selfVerifyEnabled.value && !model.isImageModel,
+            enableCouncilMode = councilModeEnabled.value && !model.isImageModel,
+            workbenchConfig = workbenchConfig.value,
+            projectContextBlock = projectContextBlock,
+            webhookContextBlock = webhookContextBlock,
+            webhookLogPrefix = webhookLogPrefix,
+            enableAutonomousAgent = isAgentActive,
+            enableCompareArena = isArenaActive
         )
 
         try {
@@ -1119,6 +1345,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             thinkingText = event.thinkingText,
                             thinkingDurationMs = event.elapsedMs,
                             isThinkingPhase = true
+                        )
+                    }
+                    is AiStreamEvent.CompareProgress -> {
+                        _streamingState.value = current.copy(
+                            compareAlphaText = event.alphaText,
+                            compareBetaText = event.betaText,
+                            isCompareArena = true,
+                            isThinkingPhase = false
                         )
                     }
                     is AiStreamEvent.ContentChunk -> {
@@ -1149,26 +1383,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     is AiStreamEvent.Completed -> {
-                        val finalHeader = if (event.generatedImagePath != null) "Aura Imagine" else auraHeaderLabel
+                        val isArenaResult = event.compareVariants.isNotEmpty()
+                        val finalHeader = when {
+                            event.generatedImagePath != null -> "Aura Imagine"
+                            isArenaResult -> "Aura Arena"
+                            else -> auraHeaderLabel
+                        }
                         val sourcesJson = serializeSources(event.sources)
-                        val newVariant = MessageVariant(
-                            content = event.fullText,
-                            thinkingContent = event.thinkingText,
-                            thinkingDurationMs = event.thinkingDurationMs,
-                            sourcesJson = sourcesJson,
-                            createdAt = System.currentTimeMillis()
-                        )
-                        val mergedVariants = priorVariants + newVariant
+                        val mergedVariants = if (isArenaResult) {
+                            priorVariants + event.compareVariants
+                        } else {
+                            priorVariants + MessageVariant(
+                                content = event.fullText,
+                                thinkingContent = event.thinkingText,
+                                thinkingDurationMs = event.thinkingDurationMs,
+                                sourcesJson = sourcesJson,
+                                createdAt = System.currentTimeMillis()
+                            )
+                        }
+                        val selectedVariantIndex = if (isArenaResult) {
+                            priorVariants.size.coerceAtLeast(0)
+                        } else {
+                            mergedVariants.lastIndex.coerceAtLeast(0)
+                        }
                         val variantsJson = if (mergedVariants.size > 1) {
                             serializeMessageVariants(mergedVariants)
                         } else {
                             null
                         }
+                        val displayContent = if (isArenaResult) {
+                            event.compareVariants.first().content
+                        } else {
+                            event.fullText
+                        }
                         val saved = MessageEntity(
                             id = assistantMsgId,
                             conversationId = conversationId,
                             role = "assistant",
-                            content = event.fullText,
+                            content = displayContent,
                             thinkingContent = event.thinkingText,
                             thinkingDurationMs = event.thinkingDurationMs,
                             modelDisplayName = finalHeader,
@@ -1177,14 +1429,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             isPinned = fallbackPreviousMessage?.isPinned ?: false,
                             isBookmarked = fallbackPreviousMessage?.isBookmarked ?: false,
                             variantsJson = variantsJson,
-                            selectedVariantIndex = mergedVariants.lastIndex.coerceAtLeast(0),
+                            selectedVariantIndex = selectedVariantIndex,
                             isError = false,
                             timestamp = fallbackPreviousMessage?.timestamp ?: System.currentTimeMillis()
                         )
                         _streamingState.value = null
                         chatRepository.saveMessage(saved)
-                        if (liveReadoutActive && spokenCursor < event.fullText.length) {
-                            val tail = sanitizeForSpeech(event.fullText.substring(spokenCursor))
+                        if (event.generatedImagePath == null) {
+                            chatRepository.extractAndSaveArtifactsFromMessage(
+                                conversationId = conversationId,
+                                messageId = assistantMsgId,
+                                markdownContent = displayContent
+                            )
+                        }
+                        if (liveReadoutActive && spokenCursor < displayContent.length) {
+                            val tail = sanitizeForSpeech(displayContent.substring(spokenCursor))
                             if (tail.isNotBlank()) {
                                 tts?.speak(
                                     tail,
@@ -1461,6 +1720,78 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Aura Autopilot Scheduled Background Agents ---
+    fun createAutopilotTask(
+        title: String,
+        prompt: String,
+        intervalHours: Int,
+        useWebSearch: Boolean
+    ) {
+        if (title.isBlank() || prompt.isBlank()) return
+        viewModelScope.launch {
+            val created = chatRepository.createAutopilotTask(
+                title = title,
+                prompt = prompt,
+                intervalHours = intervalHours,
+                useWebSearch = useWebSearch
+            )
+            withContext(Dispatchers.IO) {
+                val enabledTasks = database.auraDao().getEnabledAutopilotTasksOnce()
+                AutopilotScheduler.syncSchedules(getApplication(), enabledTasks)
+            }
+            _bannerMessage.value = "Autopilot '${created.title}' scheduled every ${created.intervalHours}h"
+        }
+    }
+
+    fun toggleAutopilotTask(task: AutopilotTaskEntity) {
+        viewModelScope.launch {
+            val nextEnabled = !task.isEnabled
+            chatRepository.setAutopilotTaskEnabled(task.id, nextEnabled)
+            withContext(Dispatchers.IO) {
+                val enabledTasks = database.auraDao().getEnabledAutopilotTasksOnce()
+                AutopilotScheduler.syncSchedules(getApplication(), enabledTasks)
+            }
+            _bannerMessage.value = if (nextEnabled) {
+                "Autopilot '${task.title}' enabled"
+            } else {
+                "Autopilot '${task.title}' paused"
+            }
+        }
+    }
+
+    fun runAutopilotTaskNow(task: AutopilotTaskEntity) {
+        if (_runningAutopilotTaskId.value != null) return
+        viewModelScope.launch {
+            _runningAutopilotTaskId.value = task.id
+            val result = withContext(Dispatchers.IO) {
+                AutopilotRunner.runTask(getApplication(), task)
+            }
+            _runningAutopilotTaskId.value = null
+            result
+                .onSuccess { convoId ->
+                    _bannerMessage.value = "Autopilot brief ready for '${task.title}'"
+                    openConversationById(convoId)
+                }
+                .onFailure { err ->
+                    _bannerMessage.value = err.message ?: "Autopilot run failed."
+                }
+        }
+    }
+
+    fun deleteAutopilotTask(id: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                AutopilotScheduler.cancelTaskJob(getApplication(), id)
+            }
+            chatRepository.deleteAutopilotTask(id)
+            withContext(Dispatchers.IO) {
+                val enabledTasks = database.auraDao().getEnabledAutopilotTasksOnce()
+                AutopilotScheduler.syncSchedules(getApplication(), enabledTasks)
+            }
+            _bannerMessage.value = "Autopilot agent deleted"
+        }
+    }
+
     // --- Portable Full Backup & Restore (.json) ---
     fun exportBackup(uri: Uri) {
         viewModelScope.launch {
@@ -1553,6 +1884,209 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    // --- Manus Agent, Compare Arena & AI Studio Workbench ---
+    fun toggleAutonomousAgent() {
+        viewModelScope.launch {
+            val next = !autonomousAgentEnabled.value
+            prefs.setAutonomousAgentEnabled(next)
+            _bannerMessage.value = if (next) {
+                "Manus Autonomous Agent ON — multi-step planning, live research & synthesis"
+            } else {
+                "Manus Autonomous Agent OFF"
+            }
+        }
+    }
+
+    fun toggleCompareArena() {
+        viewModelScope.launch {
+            val next = !compareArenaEnabled.value
+            prefs.setCompareArenaEnabled(next)
+            _bannerMessage.value = if (next) {
+                "Compare Arena A/B ON — Engine Alpha vs Engine Beta side-by-side"
+            } else {
+                "Compare Arena A/B OFF"
+            }
+        }
+    }
+
+    fun setWorkbenchTemperature(value: Float) {
+        viewModelScope.launch { prefs.setWorkbenchTemperature(value) }
+    }
+
+    fun setWorkbenchTopP(value: Float) {
+        viewModelScope.launch { prefs.setWorkbenchTopP(value) }
+    }
+
+    fun setWorkbenchMaxTokens(value: Int) {
+        viewModelScope.launch { prefs.setWorkbenchMaxTokens(value) }
+    }
+
+    fun setWorkbenchThinkingBudget(mode: ThinkingBudgetMode) {
+        viewModelScope.launch { prefs.setWorkbenchThinkingBudget(mode.id) }
+    }
+
+    fun setWorkbenchJsonSchema(enabled: Boolean, schema: String) {
+        viewModelScope.launch {
+            prefs.setJsonSchemaMode(enabled)
+            prefs.setJsonSchemaText(schema)
+        }
+    }
+
+    fun setWorkbenchSystemOverride(text: String) {
+        viewModelScope.launch { prefs.setSystemInstructionOverride(text) }
+    }
+
+    fun resetWorkbenchTuning() {
+        viewModelScope.launch {
+            prefs.resetWorkbenchTuning()
+            _bannerMessage.value = "Workbench tuning reset to defaults"
+        }
+    }
+
+    fun applyPromptTemplate(
+        template: PromptTemplateEntity,
+        variables: Map<String, String>,
+        runImmediately: Boolean
+    ) {
+        val resolvedPrompt = ChatRepository.substituteTemplateVariables(template.userTemplate, variables)
+        viewModelScope.launch {
+            if (template.systemPrompt.isNotBlank()) {
+                prefs.setSystemInstructionOverride(template.systemPrompt)
+            }
+            if (runImmediately) {
+                sendPrompt(overridePrompt = resolvedPrompt)
+            } else {
+                _composerText.value = resolvedPrompt
+                _bannerMessage.value = "Template '${template.title}' loaded"
+            }
+        }
+    }
+
+    fun createPromptTemplate(
+        title: String,
+        category: String,
+        systemPrompt: String,
+        userTemplate: String
+    ) {
+        if (title.isBlank() || userTemplate.isBlank()) return
+        viewModelScope.launch {
+            val created = chatRepository.createCustomPromptTemplate(title, category, systemPrompt, userTemplate)
+            _bannerMessage.value = "Saved prompt template '${created.title}'"
+        }
+    }
+
+    fun deletePromptTemplate(id: String) {
+        viewModelScope.launch {
+            chatRepository.deleteCustomPromptTemplate(id)
+            _bannerMessage.value = "Prompt template deleted"
+        }
+    }
+
+    // --- Claude-Style Project Workspaces ---
+    fun selectActiveProject(projectId: String?) {
+        viewModelScope.launch {
+            prefs.setActiveProjectId(projectId)
+            val label = if (projectId.isNullOrBlank()) {
+                "Showing all conversations"
+            } else {
+                val p = chatRepository.getProjectById(projectId)
+                "Workspace: ${p?.name ?: "Project"} active"
+            }
+            _bannerMessage.value = label
+        }
+    }
+
+    fun assignCurrentChatToProject(projectId: String?) {
+        val convoId = _activeConversationId.value ?: return
+        viewModelScope.launch {
+            chatRepository.updateConversationProject(convoId, projectId)
+            _bannerMessage.value = if (projectId == null) {
+                "Chat removed from workspace"
+            } else {
+                "Assigned current chat to workspace"
+            }
+        }
+    }
+
+    fun saveProject(
+        id: String?,
+        name: String,
+        description: String,
+        customInstructions: String,
+        pinnedUrlsOrNotes: String
+    ) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            val saved = chatRepository.saveProject(
+                id = id,
+                name = name,
+                description = description,
+                customInstructions = customInstructions,
+                pinnedUrlsOrNotes = pinnedUrlsOrNotes
+            )
+            prefs.setActiveProjectId(saved.id)
+            _bannerMessage.value = "Workspace '${saved.name}' saved & active"
+        }
+    }
+
+    fun deleteProject(projectId: String) {
+        viewModelScope.launch {
+            chatRepository.deleteProject(projectId)
+            if (activeProjectId.value == projectId) {
+                prefs.setActiveProjectId(null)
+            }
+            _bannerMessage.value = "Workspace deleted"
+        }
+    }
+
+    // --- Versioned Artifact Hub ---
+    fun deleteArtifact(id: String) {
+        viewModelScope.launch {
+            chatRepository.deleteArtifact(id)
+            _bannerMessage.value = "Artifact removed from Hub"
+        }
+    }
+
+    // --- Custom Webhook / REST Tools (MCP-Lite) ---
+    fun createCustomWebhook(
+        name: String,
+        description: String,
+        endpointUrl: String,
+        httpMethod: String,
+        headersJson: String,
+        bodyTemplate: String
+    ) {
+        if (name.isBlank() || endpointUrl.isBlank()) return
+        viewModelScope.launch {
+            val created = chatRepository.createCustomWebhook(
+                name = name,
+                description = description,
+                endpointUrl = endpointUrl,
+                httpMethod = httpMethod,
+                headersJson = headersJson,
+                bodyTemplate = bodyTemplate
+            )
+            _bannerMessage.value = "REST tool '${created.name}' added & enabled"
+        }
+    }
+
+    fun toggleCustomWebhook(id: String, enabled: Boolean) {
+        viewModelScope.launch {
+            chatRepository.setCustomWebhookEnabled(id, enabled)
+        }
+    }
+
+    fun deleteCustomWebhook(id: String) {
+        viewModelScope.launch {
+            chatRepository.deleteCustomWebhook(id)
+            _bannerMessage.value = "REST tool deleted"
+        }
+    }
+
+    suspend fun testWebhook(webhook: CustomWebhookEntity, sampleQuery: String): WebhookExecutionResult {
+        return aiRepository.testWebhook(webhook, sampleQuery)
     }
 
     private fun buildConversationTitle(prompt: String): String {

@@ -7,22 +7,31 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
+import com.example.data.local.CustomWebhookEntity
 import com.example.data.local.KnowledgeChunkEntity
 import com.example.data.local.MessageEntity
+import com.example.data.local.MessageVariant
 import com.example.data.local.PersonaEntity
 import com.example.data.model.AiModelTier
 import com.example.data.model.AppLanguage
 import com.example.data.model.CapabilityMode
+import com.example.data.model.ThinkingBudgetMode
+import com.example.data.model.WorkbenchConfig
 import com.example.data.preferences.PreferencesManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
@@ -43,10 +52,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.absoluteValue
 
 private const val TAG = "AuraAiRepository"
 private const val INFERENCE_TIMEOUT_MS = 240_000L
-private const val STREAM_EMIT_THROTTLE_MS = 24L
+private const val STREAM_EMIT_THROTTLE_MS = 55L
 private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 private const val GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 private const val OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -120,7 +130,14 @@ data class AiRequest(
     val vaultContextSnippets: List<KnowledgeChunkEntity> = emptyList(),
     val useWebSearch: Boolean = false,
     val useCodeExecution: Boolean = false,
-    val enableSelfVerify: Boolean = false
+    val enableSelfVerify: Boolean = false,
+    val enableCouncilMode: Boolean = false,
+    val workbenchConfig: WorkbenchConfig = WorkbenchConfig(),
+    val projectContextBlock: String = "",
+    val webhookContextBlock: String = "",
+    val webhookLogPrefix: String = "",
+    val enableAutonomousAgent: Boolean = false,
+    val enableCompareArena: Boolean = false
 )
 
 data class AutoRouteDecision(
@@ -147,13 +164,19 @@ sealed interface AiStreamEvent {
         val accumulatedText: String
     ) : AiStreamEvent
 
+    data class CompareProgress(
+        val alphaText: String,
+        val betaText: String
+    ) : AiStreamEvent
+
     data class Completed(
         val fullText: String,
         val thinkingText: String?,
         val thinkingDurationMs: Long,
         val generatedImagePath: String? = null,
         val sources: List<SourceCitation> = emptyList(),
-        val modelDisplayName: String = "Aura AI"
+        val modelDisplayName: String = "Aura AI",
+        val compareVariants: List<MessageVariant> = emptyList()
     ) : AiStreamEvent
 
     data class Failed(
@@ -164,6 +187,11 @@ sealed interface AiStreamEvent {
 interface AiRepository {
     fun streamResponse(request: AiRequest): Flow<AiStreamEvent>
     suspend fun enhancePrompt(rawPrompt: String): Result<String>
+    suspend fun testWebhook(webhook: CustomWebhookEntity, sampleQuery: String): WebhookExecutionResult
+    suspend fun executeEnabledWebhooks(
+        prompt: String,
+        enabledWebhooks: List<CustomWebhookEntity>
+    ): Pair<String, String>
 }
 
 class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
@@ -177,6 +205,25 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         .build()
 
     private val liveWebSearchEngine = LiveWebSearchEngine(httpClient)
+    private val gitHubAndUrlReader = GitHubAndUrlReader(httpClient)
+
+    override suspend fun testWebhook(
+        webhook: CustomWebhookEntity,
+        sampleQuery: String
+    ): WebhookExecutionResult = WebhookToolEngine.executeWebhook(
+        webhook = webhook,
+        queryInput = sampleQuery.ifBlank { "hello" },
+        httpClient = httpClient
+    )
+
+    override suspend fun executeEnabledWebhooks(
+        prompt: String,
+        enabledWebhooks: List<CustomWebhookEntity>
+    ): Pair<String, String> = WebhookToolEngine.gatherWebhookToolContext(
+        prompt = prompt,
+        enabledWebhooks = enabledWebhooks,
+        httpClient = httpClient
+    )
 
     private suspend fun requireGeminiApiKey(): String {
         val key = prefs.getEffectiveApiKey()
@@ -445,7 +492,25 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         val startMs = System.currentTimeMillis()
-        if (request.capabilityMode == CapabilityMode.DEEP_RESEARCH) {
+        if (request.enableAutonomousAgent &&
+            !request.enableCompareArena &&
+            request.capabilityMode != CapabilityMode.DEEP_RESEARCH
+        ) {
+            streamManusAutonomousAgent(
+                request = request,
+                geminiKeys = geminiKeys,
+                groqKeys = groqKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys,
+                exaKeys = exaKeys,
+                preferFastGroq = preferFastGroq,
+                startMs = startMs,
+                emitEvent = emitEvent
+            )
+            return
+        }
+
+        if (request.capabilityMode == CapabilityMode.DEEP_RESEARCH && !request.enableCompareArena) {
             streamDeepResearch(
                 request = request,
                 geminiKeys = geminiKeys,
@@ -461,11 +526,44 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         var liveWebContext: LiveWebContext? = null
+        var webLinkContext: WebLinkContext? = null
         val thinkingPrefixBuilder = StringBuilder()
+
+        if (request.webhookLogPrefix.isNotBlank()) {
+            thinkingPrefixBuilder.append("Aura Tools · Custom REST Webhooks:\n${request.webhookLogPrefix}\n")
+            emitEvent(
+                AiStreamEvent.ThinkingChunk(
+                    thinkingText = thinkingPrefixBuilder.toString(),
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+        }
+
+        val promptUrls = GitHubAndUrlReader.extractUrls(request.prompt)
+        if (promptUrls.isNotEmpty() && !request.modelTier.isImageModel) {
+            thinkingPrefixBuilder.append("Aura Link Reader · Fetching linked repository / webpage...\n")
+            emitEvent(
+                AiStreamEvent.ThinkingChunk(
+                    thinkingText = thinkingPrefixBuilder.toString(),
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            webLinkContext = runCatching { gitHubAndUrlReader.gatherContextForUrls(promptUrls) }.getOrNull()
+            if (webLinkContext != null) {
+                thinkingPrefixBuilder.append("Aura Link Reader · Loaded ${webLinkContext.summaryLabel}\n")
+                emitEvent(
+                    AiStreamEvent.ThinkingChunk(
+                        thinkingText = thinkingPrefixBuilder.toString(),
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+            }
+        }
+
         if (request.useWebSearch) {
             emitEvent(
                 AiStreamEvent.ThinkingChunk(
-                    thinkingText = "Searching live web for verified current sources...\n",
+                    thinkingText = thinkingPrefixBuilder.toString() + "Searching live web for verified current sources...\n",
                     elapsedMs = System.currentTimeMillis() - startMs
                 )
             )
@@ -498,10 +596,13 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             }
         }
 
-        // Dual-Pass Self-Verify Engine ("Zero-Bug Accuracy Mode")
+        // Autonomous Self-Verify & Code Integrity Audit Loop
         var verifyGuardrailsBlock = ""
-        if (request.enableSelfVerify && !request.modelTier.isImageModel && request.prompt.trim().length >= 12) {
-            thinkingPrefixBuilder.append("Aura Verify · Auditing invariants, edge cases & potential bugs...\n")
+        val runVerifyLoop = (request.enableSelfVerify || request.capabilityMode == CapabilityMode.CODE_ARCHITECT) &&
+            !request.modelTier.isImageModel &&
+            request.prompt.trim().length >= 12
+        if (runVerifyLoop) {
+            thinkingPrefixBuilder.append("Aura Verify · Auditing invariants, imports, edge cases & zero-error structure...\n")
             emitEvent(
                 AiStreamEvent.ThinkingChunk(
                     thinkingText = thinkingPrefixBuilder.toString(),
@@ -518,8 +619,43 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             )
             if (auditNotes.isNotBlank()) {
                 verifyGuardrailsBlock = "### AURA SELF-VERIFY PRE-FLIGHT CHECKLIST\n" +
-                    "Verify every item below before emitting your final solution:\n$auditNotes\n\n"
+                    "Verify and heal every item below before emitting your final solution (zero placeholders, full imports, null/concurrency safety):\n$auditNotes\n\n"
                 thinkingPrefixBuilder.append("Aura Verify Checklist Ready:\n$auditNotes\n")
+                emitEvent(
+                    AiStreamEvent.ThinkingChunk(
+                        thinkingText = thinkingPrefixBuilder.toString(),
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+            }
+        }
+
+        // Multi-Agent "Aura Council" Mode (3 Parallel Specialists + Aura Judge Synthesis)
+        var councilContextBlock = ""
+        if (request.enableCouncilMode && !request.modelTier.isImageModel && request.prompt.trim().length >= 10) {
+            thinkingPrefixBuilder.append("Aura Council · 3 independent specialists analyzing in parallel...\n")
+            emitEvent(
+                AiStreamEvent.ThinkingChunk(
+                    thinkingText = thinkingPrefixBuilder.toString(),
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            val councilNotes = runCouncilConsensusPass(
+                prompt = request.prompt,
+                extraContext = listOfNotNull(
+                    webLinkContext?.formattedPromptBlock?.take(2400),
+                    liveWebContext?.formattedPromptBlock?.take(2000),
+                    request.attachmentTextSnippet?.take(1500)
+                ).joinToString("\n\n"),
+                groqKeys = groqKeys,
+                geminiKeys = geminiKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys
+            )
+            if (councilNotes.isNotBlank()) {
+                councilContextBlock = "### AURA COUNCIL CONSENSUS DELIBERATION\n" +
+                    "Cross-examine these 3 independent specialist perspectives, resolve any disagreement, and deliver one authoritative final answer:\n$councilNotes\n\n"
+                thinkingPrefixBuilder.append("Aura Judge · Synthesizing verified consensus from 3 council specialists...\n")
                 emitEvent(
                     AiStreamEvent.ThinkingChunk(
                         thinkingText = thinkingPrefixBuilder.toString(),
@@ -536,7 +672,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             useWebSearch = request.useWebSearch,
             useCodeExecution = request.useCodeExecution,
             activeMemories = request.activeMemories,
-            hasVaultContext = request.vaultContextSnippets.isNotEmpty()
+            hasVaultContext = request.vaultContextSnippets.isNotEmpty(),
+            workbenchConfig = request.workbenchConfig
         )
         val attachedBitmaps = loadAttachedBitmaps(request)
         val livePromptNotice = when {
@@ -547,11 +684,20 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now (device may be offline or search endpoints blocked). Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
             else -> ""
         }
-        val combinedPrefixBlock = listOf(livePromptNotice, verifyGuardrailsBlock)
-            .filter { it.isNotBlank() }
-            .joinToString("\n\n")
+        val linkBlock = webLinkContext?.formattedPromptBlock.orEmpty()
+        val combinedPrefixBlock = listOf(
+            request.projectContextBlock,
+            request.webhookContextBlock,
+            linkBlock,
+            livePromptNotice,
+            verifyGuardrailsBlock,
+            councilContextBlock
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
         val promptText = buildUserPromptText(request, liveWebContextBlock = combinedPrefixBlock)
-        val liveSources = liveWebContext?.sourceCitations.orEmpty()
+        val mergedSources = linkedMapOf<String, SourceCitation>().apply {
+            webLinkContext?.sourceCitations?.let { putAll(it) }
+            liveWebContext?.sourceCitations?.let { putAll(it) }
+        }
 
         val hasExaResults = exaKeys.isNotEmpty() && !liveWebContext?.results.isNullOrEmpty()
         val requiresGeminiTools = request.useCodeExecution ||
@@ -559,13 +705,39 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             (request.useWebSearch && !hasExaResults)
 
         val nonGeminiBlock = listOf(
+            request.projectContextBlock,
+            request.webhookContextBlock,
+            linkBlock,
             if (request.useWebSearch && livePromptNotice.isBlank()) {
                 "### LIVE WEB SEARCH STATUS\nLive web search returned 0 reachable results right now. Do NOT guess or invent current prices, scores, news, or post-cutoff facts; state clearly what could not be verified live."
             } else {
                 livePromptNotice
             },
-            verifyGuardrailsBlock
+            verifyGuardrailsBlock,
+            councilContextBlock
         ).filter { it.isNotBlank() }.joinToString("\n\n")
+
+        if (request.enableCompareArena) {
+            streamCompareArena(
+                requestedTier = originalRequest.modelTier,
+                effectiveRequest = request,
+                geminiKeys = geminiKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys,
+                groqKeys = groqKeys,
+                preferFastGroq = preferFastGroq,
+                requiresGeminiTools = requiresGeminiTools,
+                systemText = systemText,
+                promptText = promptText,
+                nonGeminiFallbackPromptNotice = nonGeminiBlock,
+                attachedBitmaps = attachedBitmaps,
+                startMs = startMs,
+                initialSources = mergedSources,
+                initialThinkingPrefix = thinkingPrefixBuilder.toString(),
+                emitEvent = emitEvent
+            )
+            return
+        }
 
         val failure = streamAcrossProvidersChain(
             requestedTier = originalRequest.modelTier,
@@ -581,7 +753,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             nonGeminiFallbackPromptNotice = nonGeminiBlock,
             attachedBitmaps = attachedBitmaps,
             startMs = startMs,
-            initialSources = liveSources,
+            initialSources = mergedSources,
             initialThinkingPrefix = thinkingPrefixBuilder.toString(),
             emitEvent = emitEvent
         )
@@ -592,6 +764,133 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     sanitizeAuraError(failure.localizedMessage ?: failure.message, isImage = false)
                 )
             )
+        }
+    }
+
+    private suspend fun runCouncilConsensusPass(
+        prompt: String,
+        extraContext: String,
+        groqKeys: List<String>,
+        geminiKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>
+    ): String = coroutineScope {
+        val roles = listOf(
+            "Specialist 1 (Systems & Precision Architect)" to "Analyze core architecture, exact algorithms/math, and strict invariants concisely (max 140 words).",
+            "Specialist 2 (Critical Edge-Case & Risk Auditor)" to "Identify hidden bugs, security risks, boundary conditions, counterexamples, and failure modes concisely (max 140 words).",
+            "Specialist 3 (Pragmatic Real-World Implementer)" to "Propose the cleanest, fastest, production-ready implementation or practical decision matrix concisely (max 140 words)."
+        )
+
+        val jobs = roles.mapIndexed { idx, (roleName, directive) ->
+            async(Dispatchers.IO) {
+                val memberPrompt = buildString {
+                    append("Role: $roleName\nInstruction: $directive\n\n")
+                    if (extraContext.isNotBlank()) {
+                        append("Context:\n${extraContext.take(2000)}\n\n")
+                    }
+                    append("User Request:\n${prompt.take(2200)}")
+                }
+                val answer = runCouncilSingleSolver(
+                    slotIndex = idx,
+                    solverPrompt = memberPrompt,
+                    groqKeys = groqKeys,
+                    geminiKeys = geminiKeys,
+                    openRouterKeys = openRouterKeys,
+                    deepSeekKeys = deepSeekKeys
+                )
+                roleName to answer
+            }
+        }
+
+        jobs.mapNotNull { deferred ->
+            val (roleName, text) = deferred.await()
+            if (text.isBlank()) null else "**$roleName**:\n$text"
+        }.joinToString("\n\n")
+    }
+
+    private suspend fun runCouncilSingleSolver(
+        slotIndex: Int,
+        solverPrompt: String,
+        groqKeys: List<String>,
+        geminiKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>
+    ): String {
+        val tryGeminiFirst = slotIndex == 0 && geminiKeys.isNotEmpty()
+        val tryOpenRouterFirst = slotIndex == 2 && (openRouterKeys.isNotEmpty() || deepSeekKeys.isNotEmpty())
+
+        suspend fun tryGemini(): String {
+            for (gemKey in geminiKeys) {
+                val payload = JSONObject().put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().put("role", "user")
+                            .put("parts", JSONArray().put(JSONObject().put("text", solverPrompt)))
+                    )
+                )
+                val text = runCatching {
+                    withTimeout(11_000L) {
+                        extractTextFromResponse(
+                            executeUnaryJsonRequest("$GEMINI_API_BASE/gemini-2.5-flash-lite:generateContent?key=$gemKey", payload)
+                        )
+                    }
+                }.getOrNull()?.trim()
+                if (!text.isNullOrBlank()) return text
+            }
+            return ""
+        }
+
+        suspend fun tryGroq(): String {
+            val modelId = if (slotIndex % 2 == 0) "openai/gpt-oss-120b" else "llama-3.3-70b-versatile"
+            for (gKey in groqKeys) {
+                val payload = JSONObject().apply {
+                    put("model", modelId)
+                    put("stream", false)
+                    put("temperature", 0.3)
+                    put("max_completion_tokens", 360)
+                    put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", solverPrompt)))
+                }
+                val text = runCatching {
+                    withTimeout(10_000L) {
+                        extractTextFromGroqResponse(
+                            executeUnaryJsonRequest(GROQ_API_URL, payload, mapOf("Authorization" to "Bearer $gKey"))
+                        )
+                    }
+                }.getOrNull()?.trim()
+                if (!text.isNullOrBlank()) return text
+            }
+            return ""
+        }
+
+        suspend fun tryDeepSeekOrOr(): String {
+            for (orKey in openRouterKeys) {
+                val res = enhancePromptViaOpenAiCompat(
+                    url = OPENROUTER_API_URL,
+                    apiKey = orKey,
+                    modelIds = listOf("deepseek/deepseek-chat-v3-0324:free", "openrouter/free"),
+                    systemPrompt = "Provide a concise, high-precision specialist analysis (max 140 words).",
+                    trimmedPrompt = solverPrompt,
+                    extraHeaders = mapOf("HTTP-Referer" to "https://abhynex.aura.ai", "X-Title" to "Aura AI")
+                ).getOrNull()?.trim()
+                if (!res.isNullOrBlank()) return res
+            }
+            for (dsKey in deepSeekKeys) {
+                val res = enhancePromptViaOpenAiCompat(
+                    url = DEEPSEEK_API_URL,
+                    apiKey = dsKey,
+                    modelIds = listOf("deepseek-chat"),
+                    systemPrompt = "Provide a concise, high-precision specialist analysis (max 140 words).",
+                    trimmedPrompt = solverPrompt
+                ).getOrNull()?.trim()
+                if (!res.isNullOrBlank()) return res
+            }
+            return ""
+        }
+
+        return when {
+            tryGeminiFirst -> tryGemini().ifBlank { tryGroq() }.ifBlank { tryDeepSeekOrOr() }
+            tryOpenRouterFirst -> tryDeepSeekOrOr().ifBlank { tryGemini() }.ifBlank { tryGroq() }
+            else -> tryGroq().ifBlank { tryGemini() }.ifBlank { tryDeepSeekOrOr() }
         }
     }
 
@@ -827,6 +1126,357 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 )
             )
         }
+    }
+
+    private suspend fun streamManusAutonomousAgent(
+        request: AiRequest,
+        geminiKeys: List<String>,
+        groqKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>,
+        exaKeys: List<String>,
+        preferFastGroq: Boolean,
+        startMs: Long,
+        emitEvent: suspend (AiStreamEvent) -> Unit
+    ) {
+        val geminiKey = geminiKeys.firstOrNull().orEmpty()
+        val groqKey = groqKeys.firstOrNull().orEmpty()
+        val stepsStatus = mutableListOf(
+            "[~] Step 1/4: Decompose objective & design execution checklist",
+            "[ ] Step 2/4: Gather live web / linked repo / webhook tool context",
+            "[ ] Step 3/4: Run quantitative & edge-case verification",
+            "[ ] Step 4/4: Synthesize final publication-grade deliverable"
+        )
+        suspend fun emitTimeline(note: String = "") {
+            val header = "Aura Autonomous Agent · Live Execution Plan\n" +
+                stepsStatus.joinToString("\n") +
+                (if (note.isNotBlank()) "\n\n$note" else "")
+            emitEvent(AiStreamEvent.ThinkingChunk(header, System.currentTimeMillis() - startMs))
+        }
+
+        emitEvent(AiStreamEvent.ModelActivated("aura-agent", "Aura Autonomous Agent"))
+        emitTimeline("Inspecting goal and planning sub-tasks...")
+
+        val planQueries = planResearchQueries(request.prompt, geminiKey, groqKey)
+        stepsStatus[0] = "[x] Step 1/4: Execution checklist ready (${planQueries.size} targeted tracks)"
+        stepsStatus[1] = "[~] Step 2/4: Executing web search, URL reader & active webhook tools"
+        emitTimeline("Tracks: ${planQueries.joinToString(" · ")}")
+
+        val collectedSources = linkedMapOf<String, SourceCitation>()
+        val executionNotes = StringBuilder()
+
+        if (request.projectContextBlock.isNotBlank()) {
+            executionNotes.append(request.projectContextBlock).append("\n\n")
+        }
+        if (request.webhookContextBlock.isNotBlank()) {
+            executionNotes.append(request.webhookContextBlock).append("\n\n")
+        }
+
+        val urls = GitHubAndUrlReader.extractUrls(request.prompt)
+        if (urls.isNotEmpty()) {
+            val urlCtx = runCatching { gitHubAndUrlReader.gatherContextForUrls(urls) }.getOrNull()
+            if (urlCtx != null) {
+                collectedSources.putAll(urlCtx.sourceCitations)
+                executionNotes.append(urlCtx.formattedPromptBlock).append("\n\n")
+            }
+        }
+
+        if (request.useWebSearch || LiveWebSearchEngine.extractUrls(request.prompt).isNotEmpty()) {
+            val liveCtx = runCatching {
+                liveWebSearchEngine.gatherLiveContext(
+                    queries = planQueries.take(2),
+                    explicitUrls = LiveWebSearchEngine.extractUrls(request.prompt),
+                    maxResults = 6,
+                    exaApiKey = exaKeys.firstOrNull().orEmpty(),
+                    preferLiveCrawl = true,
+                    exaApiKeys = exaKeys
+                )
+            }.getOrNull()
+            if (liveCtx != null && liveCtx.formattedPromptBlock.isNotBlank()) {
+                collectedSources.putAll(liveCtx.sourceCitations)
+                executionNotes.append(liveCtx.formattedPromptBlock).append("\n\n")
+            }
+        }
+
+        stepsStatus[1] = "[x] Step 2/4: Context gathered (${collectedSources.size} verified sources)"
+        stepsStatus[2] = "[~] Step 3/4: Auditing quantitative logic, code invariants & risks"
+        emitTimeline()
+
+        val auditNotes = runSelfVerifyAuditPass(
+            prompt = request.prompt,
+            capabilityMode = request.capabilityMode,
+            groqKeys = groqKeys,
+            geminiKeys = geminiKeys,
+            openRouterKeys = openRouterKeys,
+            deepSeekKeys = deepSeekKeys
+        )
+        if (auditNotes.isNotBlank()) {
+            executionNotes.append("### AUTONOMOUS PRE-FLIGHT VERIFICATION\n$auditNotes\n\n")
+        }
+
+        val needsMath = Regex("(\\d+%?|calculate|budget|roi|cost|compare|benchmark|algorithm|complexity|matrix)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(request.prompt)
+        if (needsMath && executionNotes.isNotBlank()) {
+            val quant = runChainedQuantitativeCheck(
+                prompt = request.prompt,
+                researchNotes = executionNotes.toString(),
+                geminiKeys = geminiKeys,
+                groqKeys = groqKeys
+            )
+            if (quant.isNotBlank()) {
+                executionNotes.append("### QUANTITATIVE CHECK\n$quant\n\n")
+            }
+        }
+
+        stepsStatus[2] = "[x] Step 3/4: Verification & invariant audit complete"
+        stepsStatus[3] = "[~] Step 4/4: Streaming final deliverable..."
+        emitTimeline()
+
+        val finalPrompt = buildString {
+            append(executionNotes.toString())
+            append("### AUTONOMOUS AGENT DIRECTIVE\n")
+            append("You have completed multi-step research and verification. Now deliver the complete, final, ready-to-use solution with zero placeholders, clean Markdown sections, and actionable artifacts where helpful.\n\n")
+            append("User Request:\n${request.prompt}")
+        }
+        val effectiveRequest = request.copy(
+            prompt = finalPrompt,
+            capabilityMode = if (request.capabilityMode == CapabilityMode.STANDARD) CapabilityMode.DEEP_THINK else request.capabilityMode
+        )
+        val systemText = buildSystemInstruction(
+            persona = request.persona,
+            capabilityMode = effectiveRequest.capabilityMode,
+            language = request.language,
+            useWebSearch = request.useWebSearch,
+            useCodeExecution = request.useCodeExecution,
+            activeMemories = request.activeMemories,
+            hasVaultContext = request.vaultContextSnippets.isNotEmpty(),
+            workbenchConfig = request.workbenchConfig
+        )
+        val attachedBitmaps = loadAttachedBitmaps(request)
+        val finalTimeline = "Aura Autonomous Agent · Execution Checklist\n" +
+            stepsStatus.apply { set(3, "[x] Step 4/4: Final deliverable synthesized") }.joinToString("\n")
+
+        val err = streamAcrossProvidersChain(
+            requestedTier = request.modelTier,
+            effectiveRequest = effectiveRequest,
+            geminiKeys = geminiKeys,
+            openRouterKeys = openRouterKeys,
+            deepSeekKeys = deepSeekKeys,
+            groqKeys = groqKeys,
+            preferFastGroq = preferFastGroq,
+            requiresGeminiTools = request.useCodeExecution || attachedBitmaps.size > 1,
+            systemText = systemText,
+            promptText = buildUserPromptText(effectiveRequest),
+            nonGeminiFallbackPromptNotice = executionNotes.toString(),
+            attachedBitmaps = attachedBitmaps,
+            startMs = startMs,
+            initialSources = collectedSources,
+            initialThinkingPrefix = finalTimeline,
+            emitEvent = emitEvent
+        )
+        if (err != null) {
+            emitEvent(
+                AiStreamEvent.Failed(
+                    sanitizeAuraError(err.localizedMessage ?: err.message, isImage = false)
+                )
+            )
+        }
+    }
+
+    private suspend fun streamCompareArena(
+        requestedTier: AiModelTier,
+        effectiveRequest: AiRequest,
+        geminiKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>,
+        groqKeys: List<String>,
+        preferFastGroq: Boolean,
+        requiresGeminiTools: Boolean,
+        systemText: String,
+        promptText: String,
+        nonGeminiFallbackPromptNotice: String,
+        attachedBitmaps: List<Bitmap>,
+        startMs: Long,
+        initialSources: Map<String, SourceCitation>,
+        initialThinkingPrefix: String,
+        emitEvent: suspend (AiStreamEvent) -> Unit
+    ) {
+        emitEvent(AiStreamEvent.ModelActivated("aura-arena", "Aura Arena"))
+        val thinkingNote = listOfNotNull(
+            initialThinkingPrefix.ifBlank { null },
+            "Aura Arena · Streaming Engine Alpha & Engine Beta concurrently for side-by-side comparison..."
+        ).joinToString("\n")
+        emitEvent(AiStreamEvent.ThinkingChunk(thinkingNote, System.currentTimeMillis() - startMs))
+
+        val alphaRequest = effectiveRequest.copy(
+            capabilityMode = if (effectiveRequest.capabilityMode == CapabilityMode.STANDARD) {
+                CapabilityMode.CODE_ARCHITECT
+            } else {
+                effectiveRequest.capabilityMode
+            }
+        )
+        val betaTier = when {
+            effectiveRequest.modelTier == AiModelTier.GEMINI_3_8_FLASH -> AiModelTier.GEMINI_4_ARGON
+            effectiveRequest.modelTier == AiModelTier.GEMINI_4_ARGON -> AiModelTier.GEMINI_3_8_FLASH
+            else -> AiModelTier.GEMINI_3_7_FLASH
+        }
+        val betaRequest = effectiveRequest.copy(
+            modelTier = betaTier,
+            capabilityMode = CapabilityMode.DEEP_THINK,
+            workbenchConfig = effectiveRequest.workbenchConfig.copy(
+                temperature = (effectiveRequest.workbenchConfig.temperature + 0.15f).coerceAtMost(1.2f),
+                systemInstructionOverride = listOf(
+                    effectiveRequest.workbenchConfig.systemInstructionOverride,
+                    "Take an independent second perspective emphasizing clarity, edge-case robustness, and concise executive structure."
+                ).filter { it.isNotBlank() }.joinToString("\n")
+            )
+        )
+        val betaSystemText = buildSystemInstruction(
+            persona = betaRequest.persona,
+            capabilityMode = betaRequest.capabilityMode,
+            language = betaRequest.language,
+            useWebSearch = betaRequest.useWebSearch,
+            useCodeExecution = betaRequest.useCodeExecution,
+            activeMemories = betaRequest.activeMemories,
+            hasVaultContext = betaRequest.vaultContextSnippets.isNotEmpty(),
+            workbenchConfig = betaRequest.workbenchConfig
+        )
+
+        val emitMutex = Mutex()
+        var alphaLive = ""
+        var betaLive = ""
+        var alphaCompleted: AiStreamEvent.Completed? = null
+        var betaCompleted: AiStreamEvent.Completed? = null
+        var alphaError: Throwable? = null
+        var betaError: Throwable? = null
+        var lastArenaEmitMs = 0L
+
+        suspend fun flushArenaProgress(force: Boolean = false) {
+            emitMutex.withLock {
+                val now = System.currentTimeMillis()
+                if (force || now - lastArenaEmitMs >= STREAM_EMIT_THROTTLE_MS) {
+                    lastArenaEmitMs = now
+                    emitEvent(AiStreamEvent.CompareProgress(alphaText = alphaLive, betaText = betaLive))
+                }
+            }
+        }
+
+        coroutineScope {
+            val alphaJob = async(Dispatchers.IO) {
+                val err = streamAcrossProvidersChain(
+                    requestedTier = requestedTier,
+                    effectiveRequest = alphaRequest,
+                    geminiKeys = geminiKeys,
+                    openRouterKeys = openRouterKeys,
+                    deepSeekKeys = deepSeekKeys,
+                    groqKeys = groqKeys,
+                    preferFastGroq = preferFastGroq,
+                    requiresGeminiTools = requiresGeminiTools,
+                    systemText = systemText,
+                    promptText = promptText,
+                    nonGeminiFallbackPromptNotice = nonGeminiFallbackPromptNotice,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = "",
+                    emitEvent = { ev ->
+                        when (ev) {
+                            is AiStreamEvent.ContentChunk -> {
+                                alphaLive = ev.accumulatedText
+                                flushArenaProgress()
+                            }
+                            is AiStreamEvent.Completed -> {
+                                alphaLive = ev.fullText
+                                alphaCompleted = ev
+                                flushArenaProgress(force = true)
+                            }
+                            else -> Unit
+                        }
+                    }
+                )
+                alphaError = err
+            }
+
+            val betaJob = async(Dispatchers.IO) {
+                val err = streamAcrossProvidersChain(
+                    requestedTier = betaTier,
+                    effectiveRequest = betaRequest,
+                    geminiKeys = geminiKeys,
+                    openRouterKeys = openRouterKeys,
+                    deepSeekKeys = deepSeekKeys,
+                    groqKeys = groqKeys,
+                    preferFastGroq = !preferFastGroq,
+                    requiresGeminiTools = requiresGeminiTools,
+                    systemText = betaSystemText,
+                    promptText = promptText,
+                    nonGeminiFallbackPromptNotice = nonGeminiFallbackPromptNotice,
+                    attachedBitmaps = attachedBitmaps,
+                    startMs = startMs,
+                    initialSources = initialSources,
+                    initialThinkingPrefix = "",
+                    emitEvent = { ev ->
+                        when (ev) {
+                            is AiStreamEvent.ContentChunk -> {
+                                betaLive = ev.accumulatedText
+                                flushArenaProgress()
+                            }
+                            is AiStreamEvent.Completed -> {
+                                betaLive = ev.fullText
+                                betaCompleted = ev
+                                flushArenaProgress(force = true)
+                            }
+                            else -> Unit
+                        }
+                    }
+                )
+                betaError = err
+            }
+
+            alphaJob.await()
+            betaJob.await()
+        }
+
+        val finalAlpha = alphaCompleted
+        val finalBeta = betaCompleted
+
+        if (finalAlpha == null && finalBeta == null) {
+            val err = alphaError ?: betaError
+            emitEvent(
+                AiStreamEvent.Failed(
+                    sanitizeAuraError(err?.localizedMessage ?: err?.message, isImage = false)
+                )
+            )
+            return
+        }
+
+        val alphaText = finalAlpha?.fullText ?: alphaLive.ifBlank { "Engine Alpha could not complete this run." }
+        val betaText = finalBeta?.fullText ?: betaLive.ifBlank { "Engine Beta could not complete this run." }
+        val durationMs = System.currentTimeMillis() - startMs
+        val alphaVariant = MessageVariant(
+            content = alphaText,
+            thinkingContent = finalAlpha?.thinkingText,
+            thinkingDurationMs = finalAlpha?.thinkingDurationMs ?: durationMs,
+            engineLabel = "Engine Alpha"
+        )
+        val betaVariant = MessageVariant(
+            content = betaText,
+            thinkingContent = finalBeta?.thinkingText,
+            thinkingDurationMs = finalBeta?.thinkingDurationMs ?: durationMs,
+            engineLabel = "Engine Beta"
+        )
+        val mergedSources = (finalAlpha?.sources.orEmpty() + finalBeta?.sources.orEmpty())
+            .distinctBy { it.uri }
+
+        emitEvent(
+            AiStreamEvent.Completed(
+                fullText = alphaText,
+                thinkingText = thinkingNote,
+                thinkingDurationMs = durationMs,
+                sources = mergedSources,
+                modelDisplayName = "Aura Arena",
+                compareVariants = listOf(alphaVariant, betaVariant)
+            )
+        )
     }
 
     private suspend fun runChainedQuantitativeCheck(
@@ -1378,7 +2028,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     modelId = modelId,
                     toolsArray = if (includeTools) toolsJson else null,
                     includeThinking = includeThinkingConfig,
-                    includeSystemInstruction = candidate.supportsSystemInstruction
+                    includeSystemInstruction = candidate.supportsSystemInstruction,
+                    workbenchConfig = request.workbenchConfig
                 )
 
                 withTimeout(INFERENCE_TIMEOUT_MS) {
@@ -1643,25 +2294,35 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         var lastThinkingEmitMs = 0L
 
         return try {
-            val maxTokens = when {
-                modelId.contains("8b-instant") || modelId.contains("llama-4-scout") -> 8192
+            val wb = request.workbenchConfig
+            val defaultMaxTokens = when {
+                modelId.startsWith("deepseek", ignoreCase = true) -> 8192
+                modelId.contains("llama-3.1-8b") -> 8192
                 else -> 16384
+            }
+            val maxTokens = if (wb.maxOutputTokens != 8192) {
+                wb.maxOutputTokens.coerceIn(512, defaultMaxTokens)
+            } else defaultMaxTokens
+            val effectiveTemp = if ((wb.temperature - 0.7f).absoluteValue > 0.01f) {
+                wb.temperature.coerceIn(0f, 1.5f).toDouble()
+            } else {
+                when {
+                    request.capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
+                    request.useWebSearch -> 0.25
+                    request.capabilityMode == CapabilityMode.CONCISE -> 0.35
+                    request.capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
+                    else -> 0.6
+                }
             }
             val payload = JSONObject().apply {
                 put("model", modelId)
                 put("messages", messagesArray)
                 put("stream", true)
                 if (!modelId.contains("deepseek-reasoner")) {
-                    put(
-                        "temperature",
-                        when {
-                            request.capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
-                            request.useWebSearch -> 0.25
-                            request.capabilityMode == CapabilityMode.CONCISE -> 0.35
-                            request.capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
-                            else -> 0.6
-                        }
-                    )
+                    put("temperature", effectiveTemp)
+                    if ((wb.topP - 0.95f).absoluteValue > 0.01f) {
+                        put("top_p", wb.topP.coerceIn(0.1f, 1.0f).toDouble())
+                    }
                 }
                 if (useMaxCompletionTokens) {
                     put("max_completion_tokens", maxTokens)
@@ -2046,14 +2707,31 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         modelId: String,
         toolsArray: JSONArray?,
         includeThinking: Boolean,
-        includeSystemInstruction: Boolean = true
+        includeSystemInstruction: Boolean = true,
+        workbenchConfig: WorkbenchConfig = WorkbenchConfig()
     ): JSONObject {
         val isProModel = modelId.contains("2.5-pro", ignoreCase = true)
-        val maxOut = when {
+        val modelCapMaxOut = when {
             modelId.startsWith("gemma-", ignoreCase = true) -> 8192
             modelId.contains("2.0-flash", ignoreCase = true) -> 8192
             else -> 65536
         }
+        val maxOut = if (workbenchConfig.maxOutputTokens != 8192) {
+            workbenchConfig.maxOutputTokens.coerceIn(512, modelCapMaxOut)
+        } else modelCapMaxOut
+
+        val effectiveTemp = if ((workbenchConfig.temperature - 0.7f).absoluteValue > 0.01f) {
+            workbenchConfig.temperature.coerceIn(0f, 1.5f).toDouble()
+        } else {
+            when {
+                capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
+                capabilityMode == CapabilityMode.DEEP_RESEARCH -> 0.25
+                capabilityMode == CapabilityMode.CONCISE -> 0.35
+                capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
+                else -> 0.6
+            }
+        }
+
         return JSONObject().apply {
             if (includeSystemInstruction) {
                 put(
@@ -2067,35 +2745,46 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             put("contents", contentsArray)
             val generationConfig = JSONObject().apply {
                 put("maxOutputTokens", maxOut)
-                put(
-                    "temperature",
-                    when {
-                        capabilityMode == CapabilityMode.CODE_ARCHITECT -> 0.2
-                        capabilityMode == CapabilityMode.DEEP_RESEARCH -> 0.25
-                        capabilityMode == CapabilityMode.CONCISE -> 0.35
-                        capabilityMode == CapabilityMode.DEEP_THINK -> 0.45
-                        else -> 0.6
-                    }
-                )
+                put("temperature", effectiveTemp)
+                if ((workbenchConfig.topP - 0.95f).absoluteValue > 0.01f) {
+                    put("topP", workbenchConfig.topP.coerceIn(0.1f, 1.0f).toDouble())
+                }
+                if (workbenchConfig.jsonSchemaMode && (toolsArray == null || toolsArray.length() == 0)) {
+                    put("responseMimeType", "application/json")
+                }
                 if (includeThinking) {
                     val thinkingObj = JSONObject().apply {
-                        when {
-                            capabilityMode == CapabilityMode.CODE_ARCHITECT ||
-                                capabilityMode == CapabilityMode.DEEP_THINK ||
-                                capabilityMode == CapabilityMode.DEEP_RESEARCH ||
-                                modelTier == AiModelTier.GEMINI_4_ARGON -> {
+                        when (workbenchConfig.thinkingBudgetMode) {
+                            ThinkingBudgetMode.OFF -> {
+                                put("includeThoughts", false)
+                                if (!isProModel) put("thinkingBudget", 0)
+                            }
+                            ThinkingBudgetMode.LIGHT -> {
+                                put("includeThoughts", true)
+                                put("thinkingBudget", 2048)
+                            }
+                            ThinkingBudgetMode.DEEP -> {
                                 put("includeThoughts", true)
                                 put("thinkingBudget", 12288)
                             }
-                            capabilityMode == CapabilityMode.CONCISE -> {
-                                put("includeThoughts", false)
-                                if (!isProModel) {
-                                    put("thinkingBudget", 0)
+                            ThinkingBudgetMode.AUTO -> when {
+                                capabilityMode == CapabilityMode.CODE_ARCHITECT ||
+                                    capabilityMode == CapabilityMode.DEEP_THINK ||
+                                    capabilityMode == CapabilityMode.DEEP_RESEARCH ||
+                                    modelTier == AiModelTier.GEMINI_4_ARGON -> {
+                                    put("includeThoughts", true)
+                                    put("thinkingBudget", 12288)
                                 }
-                            }
-                            else -> {
-                                put("includeThoughts", true)
-                                put("thinkingBudget", 2048)
+                                capabilityMode == CapabilityMode.CONCISE -> {
+                                    put("includeThoughts", false)
+                                    if (!isProModel) {
+                                        put("thinkingBudget", 0)
+                                    }
+                                }
+                                else -> {
+                                    put("includeThoughts", true)
+                                    put("thinkingBudget", 2048)
+                                }
                             }
                         }
                     }
@@ -2242,7 +2931,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         useWebSearch: Boolean,
         useCodeExecution: Boolean,
         activeMemories: List<String> = emptyList(),
-        hasVaultContext: Boolean = false
+        hasVaultContext: Boolean = false,
+        workbenchConfig: WorkbenchConfig = WorkbenchConfig()
     ): String {
         val currentDateTime = SimpleDateFormat("EEEE, yyyy-MM-dd HH:mm z", Locale.US).format(Date())
         val brandRule = """
@@ -2281,6 +2971,18 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             "\n\nPrivate Knowledge Vault Context Provided: Prioritize grounded facts from the `[Vault: ...]` excerpts included in the prompt and cite the document title inline (e.g., `[Vault: Title]`)."
         } else ""
 
+        val workbenchDirective = buildString {
+            if (workbenchConfig.systemInstructionOverride.isNotBlank()) {
+                append("\n\n### WORKBENCH CUSTOM SYSTEM INSTRUCTION\n")
+                append(workbenchConfig.systemInstructionOverride.trim())
+            }
+            if (workbenchConfig.jsonSchemaMode) {
+                append("\n\n### STRICT JSON OUTPUT SCHEMA MODE\n")
+                append("Output ONLY valid raw JSON (no markdown fences, no commentary) matching this exact schema/structure:\n")
+                append(workbenchConfig.jsonSchemaText.ifBlank { "{\"result\": \"string\", \"details\": []}" })
+            }
+        }
+
         val personaPrompt = persona?.systemPrompt
             ?: "You are a helpful, accurate, and thoughtful AI assistant."
 
@@ -2297,7 +2999,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 "Be direct, crisp, and scannable using executive bullet points, clean equations, and zero filler."
         }
 
-        return "$brandRule$searchDirective$sandboxDirective$memoryBlock$vaultDirective\n\nPersona Focus: $personaPrompt\n\nMode: $modeInstruction"
+        return "$brandRule$searchDirective$sandboxDirective$memoryBlock$vaultDirective$workbenchDirective\n\nPersona Focus: $personaPrompt\n\nMode: $modeInstruction"
     }
 
     private fun currentFormattedDateOnly(): String {

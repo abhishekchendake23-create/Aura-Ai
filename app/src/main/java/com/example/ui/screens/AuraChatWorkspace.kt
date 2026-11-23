@@ -168,11 +168,30 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val webSearchEnabled by viewModel.webSearchEnabled.collectAsStateWithLifecycle()
     val codeExecutionEnabled by viewModel.codeExecutionEnabled.collectAsStateWithLifecycle()
     val selfVerifyEnabled by viewModel.selfVerifyEnabled.collectAsStateWithLifecycle()
+    val councilModeEnabled by viewModel.councilModeEnabled.collectAsStateWithLifecycle()
     val liveVoiceReadoutEnabled by viewModel.liveVoiceReadoutEnabled.collectAsStateWithLifecycle()
     val isEnhancingPrompt by viewModel.isEnhancingPrompt.collectAsStateWithLifecycle()
     val personas by viewModel.personas.collectAsStateWithLifecycle()
     val activePersona by viewModel.activePersona.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val messageSearchHits by viewModel.messageSearchHits.collectAsStateWithLifecycle()
+    val autopilotTasks by viewModel.autopilotTasks.collectAsStateWithLifecycle()
+    val runningAutopilotTaskId by viewModel.runningAutopilotTaskId.collectAsStateWithLifecycle()
+    val autonomousAgentEnabled by viewModel.autonomousAgentEnabled.collectAsStateWithLifecycle()
+    val compareArenaEnabled by viewModel.compareArenaEnabled.collectAsStateWithLifecycle()
+    val workbenchConfig by viewModel.workbenchConfig.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
+    val activeProjectId by viewModel.activeProjectId.collectAsStateWithLifecycle()
+    val activeProject by viewModel.activeProject.collectAsStateWithLifecycle()
+    val artifacts by viewModel.artifacts.collectAsStateWithLifecycle()
+    val promptTemplates by viewModel.promptTemplates.collectAsStateWithLifecycle()
+    val customWebhooks by viewModel.customWebhooks.collectAsStateWithLifecycle()
+    val currentConvoProjectId = remember(conversations, activeConversationId) {
+        conversations.find { it.id == activeConversationId }?.projectId
+    }
+    val enabledWebhookCount = remember(customWebhooks) {
+        customWebhooks.count { it.isEnabled }
+    }
     val speakingMessageId by viewModel.speakingMessageId.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarkedMessages.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -202,6 +221,11 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     var showMemorySheet by remember { mutableStateOf(false) }
     var showKnowledgeVaultSheet by remember { mutableStateOf(false) }
     var showWhisperSheet by remember { mutableStateOf(false) }
+    var showAutopilotSheet by remember { mutableStateOf(false) }
+    var showWorkbenchSheet by remember { mutableStateOf(false) }
+    var showProjectsSheet by remember { mutableStateOf(false) }
+    var showArtifactHubSheet by remember { mutableStateOf(false) }
+    var showWebhooksSheet by remember { mutableStateOf(false) }
     var isInChatSearchOpen by remember { mutableStateOf(false) }
     var inChatQuery by remember { mutableStateOf("") }
     var editingUserMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -301,10 +325,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
 
     LaunchedEffect(
         streamingState?.contentText?.length,
-        streamingState?.thinkingText?.length
+        streamingState?.thinkingText?.length,
+        streamingState?.compareAlphaText?.length,
+        streamingState?.compareBetaText?.length
     ) {
         if (streamingState != null && isNearBottom) {
-            delay(25L)
+            delay(90L)
             val lastItemIndex = messages.size + 1
             listState.scrollToItem(lastItemIndex, scrollOffset = Int.MAX_VALUE / 2)
         }
@@ -315,18 +341,29 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         drawerContent = {
             ChatDrawerContent(
                 conversations = conversations,
+                messageSearchHits = messageSearchHits,
+                projects = projects,
+                activeProjectId = activeProjectId,
                 activeConversationId = activeConversationId,
                 searchQuery = searchQuery,
                 bookmarkCount = bookmarks.size,
                 memoryCount = memories.size,
                 vaultDocCount = knowledgeDocs.size,
+                autopilotCount = autopilotTasks.count { it.isEnabled },
+                artifactCount = artifacts.size,
+                webhookCount = enabledWebhookCount,
                 onSearchQueryChange = { viewModel.updateSearchQuery(it) },
+                onSelectActiveProject = { viewModel.selectActiveProject(it) },
                 onNewChat = {
                     viewModel.startNewChat()
                     scope.launch { drawerState.close() }
                 },
                 onSelectConversation = { convo ->
                     viewModel.openConversation(convo)
+                    scope.launch { drawerState.close() }
+                },
+                onSelectSearchHit = { hit ->
+                    viewModel.openConversationById(hit.conversationId)
                     scope.launch { drawerState.close() }
                 },
                 onTogglePin = { viewModel.togglePinConversation(it) },
@@ -356,6 +393,26 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     scope.launch { drawerState.close() }
                     showMemorySheet = true
                 },
+                onOpenAutopilot = {
+                    scope.launch { drawerState.close() }
+                    showAutopilotSheet = true
+                },
+                onOpenProjects = {
+                    scope.launch { drawerState.close() }
+                    showProjectsSheet = true
+                },
+                onOpenArtifactHub = {
+                    scope.launch { drawerState.close() }
+                    showArtifactHubSheet = true
+                },
+                onOpenWorkbench = {
+                    scope.launch { drawerState.close() }
+                    showWorkbenchSheet = true
+                },
+                onOpenWebhooks = {
+                    scope.launch { drawerState.close() }
+                    showWebhooksSheet = true
+                },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     showSettingsSheet = true
@@ -370,7 +427,11 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             topBar = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     AuraTopBar(
-                        modelShortName = if (selectedModel.isImageModel) "Aura Imagine" else "Aura AI",
+                        modelShortName = when {
+                            selectedModel.isImageModel -> "Aura Imagine"
+                            compareArenaEnabled -> "Aura Arena"
+                            else -> "Aura AI"
+                        },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenModelSelector = { showModelSheet = true },
                         onNewChat = { viewModel.startNewChat() }
@@ -468,6 +529,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     codeExecutionEnabled = codeExecutionEnabled,
                     vaultRagActive = vaultRagEnabled && knowledgeDocs.isNotEmpty(),
                     selfVerifyEnabled = selfVerifyEnabled,
+                    councilModeEnabled = councilModeEnabled,
+                    autonomousAgentEnabled = autonomousAgentEnabled,
+                    compareArenaEnabled = compareArenaEnabled,
+                    jsonSchemaActive = workbenchConfig.jsonSchemaMode,
+                    activeProjectName = activeProject?.name,
+                    enabledWebhookCount = enabledWebhookCount,
                     liveVoiceReadoutEnabled = liveVoiceReadoutEnabled,
                     isStreaming = streamingState != null,
                     onTextChange = { viewModel.updateComposerText(it) },
@@ -492,6 +559,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     onClearImagineMode = { viewModel.selectModel(AiModelTier.GEMINI_3_8_FLASH) },
                     onClearSandboxMode = { viewModel.toggleCodeExecution() },
                     onClearSelfVerify = { viewModel.toggleSelfVerify() },
+                    onClearCouncilMode = { viewModel.toggleCouncilMode() },
+                    onClearAutonomousAgent = { viewModel.toggleAutonomousAgent() },
+                    onClearCompareArena = { viewModel.toggleCompareArena() },
+                    onOpenWorkbench = { showWorkbenchSheet = true },
+                    onOpenProjects = { showProjectsSheet = true },
+                    onOpenWebhooks = { showWebhooksSheet = true },
                     onClearLiveVoiceReadout = { viewModel.toggleLiveVoiceReadout() },
                     onSend = { viewModel.sendPrompt() },
                     onStop = { viewModel.stopGeneration() }
@@ -566,6 +639,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                     },
                                     onTogglePin = { viewModel.toggleMessagePinned(msg) },
                                     onSelectVariant = { idx -> viewModel.switchAssistantVariant(msg, idx) },
+                                    onLockArenaWinner = { idx -> viewModel.lockArenaWinner(msg, idx) },
+                                    onForkHere = { viewModel.forkConversationFromMessage(msg) },
                                     onExportPdf = {
                                         scope.launch {
                                             runCatching {
@@ -623,6 +698,13 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             activePersona = activePersona,
             codeExecutionEnabled = codeExecutionEnabled,
             selfVerifyEnabled = selfVerifyEnabled,
+            councilModeEnabled = councilModeEnabled,
+            autonomousAgentEnabled = autonomousAgentEnabled,
+            compareArenaEnabled = compareArenaEnabled,
+            jsonSchemaActive = workbenchConfig.jsonSchemaMode,
+            activeProjectName = activeProject?.name,
+            artifactCount = artifacts.size,
+            webhookCount = enabledWebhookCount,
             liveVoiceReadoutEnabled = liveVoiceReadoutEnabled,
             hasMessages = messages.isNotEmpty(),
             canEnhancePrompt = composerText.trim().length >= 4 && streamingState == null,
@@ -630,6 +712,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             hasEffectiveApiKey = hasEffectiveApiKey,
             memoryCount = memories.size,
             vaultDocCount = knowledgeDocs.size,
+            autopilotCount = autopilotTasks.count { it.isEnabled },
             onSelectLanguage = { viewModel.selectLanguage(it) },
             onSelectCapability = { viewModel.selectCapability(it) },
             onToggleImagineMode = {
@@ -641,7 +724,14 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             },
             onToggleCodeExecution = { viewModel.toggleCodeExecution() },
             onToggleSelfVerify = { viewModel.toggleSelfVerify() },
+            onToggleCouncilMode = { viewModel.toggleCouncilMode() },
+            onToggleAutonomousAgent = { viewModel.toggleAutonomousAgent() },
+            onToggleCompareArena = { viewModel.toggleCompareArena() },
             onToggleLiveVoiceReadout = { viewModel.toggleLiveVoiceReadout() },
+            onOpenWorkbench = { showWorkbenchSheet = true },
+            onOpenProjects = { showProjectsSheet = true },
+            onOpenArtifactHub = { showArtifactHubSheet = true },
+            onOpenWebhooks = { showWebhooksSheet = true },
             onPickFile = {
                 filePickerLauncher.launch(arrayOf("*/*"))
             },
@@ -649,6 +739,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             onOpenWhisperAudio = { showWhisperSheet = true },
             onOpenKnowledgeVault = { showKnowledgeVaultSheet = true },
             onOpenMemoryVault = { showMemorySheet = true },
+            onOpenAutopilot = { showAutopilotSheet = true },
             onVoiceDictation = {
                 val speechLang = if (selectedLanguage.speechLocaleTag.isNotBlank()) {
                     selectedLanguage.speechLocaleTag
@@ -787,6 +878,90 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             onInsertTranscript = { transcript -> viewModel.appendVoiceText(transcript) },
             onRunPromptWithTranscript = { prompt -> viewModel.sendPrompt(overridePrompt = prompt) },
             onDismiss = { showWhisperSheet = false }
+        )
+    }
+
+    if (showAutopilotSheet) {
+        AutopilotSheet(
+            tasks = autopilotTasks,
+            runningTaskId = runningAutopilotTaskId,
+            onCreateTask = { title, prompt, intervalHours, useWebSearch ->
+                viewModel.createAutopilotTask(title, prompt, intervalHours, useWebSearch)
+            },
+            onToggleTask = { task -> viewModel.toggleAutopilotTask(task) },
+            onRunTaskNow = { task ->
+                showAutopilotSheet = false
+                viewModel.runAutopilotTaskNow(task)
+            },
+            onOpenConversation = { convoId ->
+                showAutopilotSheet = false
+                viewModel.openConversationById(convoId)
+            },
+            onDeleteTask = { id -> viewModel.deleteAutopilotTask(id) },
+            onDismiss = { showAutopilotSheet = false }
+        )
+    }
+
+    if (showWorkbenchSheet) {
+        WorkbenchSheet(
+            config = workbenchConfig,
+            templates = promptTemplates,
+            onUpdateTemperature = { viewModel.setWorkbenchTemperature(it) },
+            onUpdateTopP = { viewModel.setWorkbenchTopP(it) },
+            onUpdateMaxTokens = { viewModel.setWorkbenchMaxTokens(it) },
+            onUpdateThinkingBudget = { viewModel.setWorkbenchThinkingBudget(it) },
+            onUpdateJsonSchema = { enabled, schema -> viewModel.setWorkbenchJsonSchema(enabled, schema) },
+            onUpdateSystemOverride = { viewModel.setWorkbenchSystemOverride(it) },
+            onResetTuning = { viewModel.resetWorkbenchTuning() },
+            onApplyTemplate = { tpl, vars, runNow ->
+                viewModel.applyPromptTemplate(tpl, vars, runNow)
+                showWorkbenchSheet = false
+            },
+            onCreateTemplate = { title, cat, sys, usr ->
+                viewModel.createPromptTemplate(title, cat, sys, usr)
+            },
+            onDeleteTemplate = { viewModel.deletePromptTemplate(it) },
+            onDismiss = { showWorkbenchSheet = false }
+        )
+    }
+
+    if (showProjectsSheet) {
+        ProjectWorkspacesSheet(
+            projects = projects,
+            activeProjectId = activeProjectId,
+            currentConversationProjectId = if (activeConversationId != null) currentConvoProjectId else activeProjectId,
+            onSelectWorkspaceFilter = { viewModel.selectActiveProject(it) },
+            onAssignCurrentChatToProject = { viewModel.assignCurrentChatToProject(it) },
+            onSaveProject = { id, name, desc, instr, notes ->
+                viewModel.saveProject(id, name, desc, instr, notes)
+            },
+            onDeleteProject = { viewModel.deleteProject(it) },
+            onDismiss = { showProjectsSheet = false }
+        )
+    }
+
+    if (showArtifactHubSheet) {
+        ArtifactHubSheet(
+            artifacts = artifacts,
+            onDeleteArtifact = { viewModel.deleteArtifact(it) },
+            onAutoFixArtifactError = { errLog, code ->
+                showArtifactHubSheet = false
+                viewModel.autoFixArtifactCode(errLog, code)
+            },
+            onDismiss = { showArtifactHubSheet = false }
+        )
+    }
+
+    if (showWebhooksSheet) {
+        WebhookToolsSheet(
+            webhooks = customWebhooks,
+            onCreateWebhook = { name, desc, url, method, headers, body ->
+                viewModel.createCustomWebhook(name, desc, url, method, headers, body)
+            },
+            onToggleWebhook = { id, enabled -> viewModel.toggleCustomWebhook(id, enabled) },
+            onDeleteWebhook = { viewModel.deleteCustomWebhook(it) },
+            onTestWebhook = { hook, query -> viewModel.testWebhook(hook, query) },
+            onDismiss = { showWebhooksSheet = false }
         )
     }
 

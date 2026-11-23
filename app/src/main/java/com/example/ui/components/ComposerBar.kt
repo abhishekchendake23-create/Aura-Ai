@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
@@ -47,12 +48,14 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -101,6 +104,12 @@ fun ComposerBar(
     codeExecutionEnabled: Boolean,
     vaultRagActive: Boolean = false,
     selfVerifyEnabled: Boolean = false,
+    councilModeEnabled: Boolean = false,
+    autonomousAgentEnabled: Boolean = false,
+    compareArenaEnabled: Boolean = false,
+    jsonSchemaActive: Boolean = false,
+    activeProjectName: String? = null,
+    enabledWebhookCount: Int = 0,
     liveVoiceReadoutEnabled: Boolean = false,
     isStreaming: Boolean,
     onTextChange: (String) -> Unit,
@@ -114,6 +123,12 @@ fun ComposerBar(
     onClearImagineMode: () -> Unit,
     onClearSandboxMode: () -> Unit,
     onClearSelfVerify: () -> Unit = {},
+    onClearCouncilMode: () -> Unit = {},
+    onClearAutonomousAgent: () -> Unit = {},
+    onClearCompareArena: () -> Unit = {},
+    onOpenWorkbench: () -> Unit = {},
+    onOpenProjects: () -> Unit = {},
+    onOpenWebhooks: () -> Unit = {},
     onClearLiveVoiceReadout: () -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -234,7 +249,14 @@ fun ComposerBar(
                     visible = attachment != null || isImageActive || codeExecutionEnabled ||
                         selectedLanguage != AppLanguage.AUTO ||
                         selectedCapability == CapabilityMode.DEEP_RESEARCH || vaultRagActive ||
-                        (selfVerifyEnabled && !isImageActive) || (liveVoiceReadoutEnabled && !isImageActive)
+                        (selfVerifyEnabled && !isImageActive) ||
+                        (councilModeEnabled && !isImageActive) ||
+                        (autonomousAgentEnabled && !isImageActive) ||
+                        (compareArenaEnabled && !isImageActive) ||
+                        (jsonSchemaActive && !isImageActive) ||
+                        !activeProjectName.isNullOrBlank() ||
+                        (enabledWebhookCount > 0 && !isImageActive) ||
+                        (liveVoiceReadoutEnabled && !isImageActive)
                 ) {
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -318,11 +340,52 @@ fun ComposerBar(
                                 onDismiss = onOpenToolsSheet
                             )
                         }
+                        if (!isImageActive && councilModeEnabled) {
+                            MiniDismissBadge(
+                                label = "Council 3x",
+                                accentColor = auraColors.sparkleStart,
+                                onDismiss = onClearCouncilMode
+                            )
+                        }
                         if (!isImageActive && selfVerifyEnabled) {
                             MiniDismissBadge(
                                 label = "Self-Verify",
                                 accentColor = auraColors.emerald,
                                 onDismiss = onClearSelfVerify
+                            )
+                        }
+                        if (!isImageActive && autonomousAgentEnabled) {
+                            MiniDismissBadge(
+                                label = "Manus Agent",
+                                accentColor = auraColors.sparkleStart,
+                                onDismiss = onClearAutonomousAgent
+                            )
+                        }
+                        if (!isImageActive && compareArenaEnabled) {
+                            MiniDismissBadge(
+                                label = "Arena A/B",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onClearCompareArena
+                            )
+                        }
+                        if (!isImageActive && jsonSchemaActive) {
+                            MiniDismissBadge(
+                                label = "JSON Schema",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onOpenWorkbench
+                            )
+                        }
+                        if (!activeProjectName.isNullOrBlank()) {
+                            MiniDismissBadge(
+                                label = "Project: $activeProjectName",
+                                onDismiss = onOpenProjects
+                            )
+                        }
+                        if (!isImageActive && enabledWebhookCount > 0) {
+                            MiniDismissBadge(
+                                label = "Tools ($enabledWebhookCount)",
+                                accentColor = auraColors.emerald,
+                                onDismiss = onOpenWebhooks
                             )
                         }
                         if (!isImageActive && liveVoiceReadoutEnabled) {
@@ -579,6 +642,13 @@ fun AuraToolsSheet(
     activePersona: PersonaEntity?,
     codeExecutionEnabled: Boolean,
     selfVerifyEnabled: Boolean = false,
+    councilModeEnabled: Boolean = false,
+    autonomousAgentEnabled: Boolean = false,
+    compareArenaEnabled: Boolean = false,
+    jsonSchemaActive: Boolean = false,
+    activeProjectName: String? = null,
+    artifactCount: Int = 0,
+    webhookCount: Int = 0,
     liveVoiceReadoutEnabled: Boolean = false,
     hasMessages: Boolean,
     canEnhancePrompt: Boolean,
@@ -586,17 +656,26 @@ fun AuraToolsSheet(
     hasEffectiveApiKey: Boolean,
     memoryCount: Int = 0,
     vaultDocCount: Int = 0,
+    autopilotCount: Int = 0,
     onSelectLanguage: (AppLanguage) -> Unit,
     onSelectCapability: (CapabilityMode) -> Unit,
     onToggleImagineMode: () -> Unit,
     onToggleCodeExecution: () -> Unit,
     onToggleSelfVerify: () -> Unit = {},
+    onToggleCouncilMode: () -> Unit = {},
+    onToggleAutonomousAgent: () -> Unit = {},
+    onToggleCompareArena: () -> Unit = {},
     onToggleLiveVoiceReadout: () -> Unit = {},
+    onOpenWorkbench: () -> Unit = {},
+    onOpenProjects: () -> Unit = {},
+    onOpenArtifactHub: () -> Unit = {},
+    onOpenWebhooks: () -> Unit = {},
     onPickFile: () -> Unit,
     onOpenScanner: () -> Unit = {},
     onOpenWhisperAudio: () -> Unit = {},
     onOpenKnowledgeVault: () -> Unit = {},
     onOpenMemoryVault: () -> Unit = {},
+    onOpenAutopilot: () -> Unit = {},
     onVoiceDictation: () -> Unit,
     onInsertSlashCommand: () -> Unit,
     onEnhancePrompt: () -> Unit,
@@ -819,6 +898,105 @@ fun AuraToolsSheet(
                             onOpenMemoryVault()
                         },
                         modifier = Modifier.weight(1f).testTag("tools_memory_vault_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Bolt,
+                        title = if (autonomousAgentEnabled) "Manus Agent ON" else "Manus Agent",
+                        highlighted = autonomousAgentEnabled,
+                        accent = auraColors.sparkleStart,
+                        onClick = {
+                            onToggleAutonomousAgent()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_autonomous_agent")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Verified,
+                        title = if (compareArenaEnabled) "Compare A/B ON" else "Compare A/B",
+                        highlighted = compareArenaEnabled,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onToggleCompareArena()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_compare_arena")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Tune,
+                        title = if (jsonSchemaActive) "Workbench · JSON" else "Workbench & Prompts",
+                        highlighted = jsonSchemaActive,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onDismiss()
+                            onOpenWorkbench()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_workbench_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.FolderShared,
+                        title = activeProjectName?.let { "Proj: $it" } ?: "Projects",
+                        highlighted = !activeProjectName.isNullOrBlank(),
+                        onClick = {
+                            onDismiss()
+                            onOpenProjects()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_projects_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Code,
+                        title = if (artifactCount > 0) "Artifacts ($artifactCount)" else "Artifact Hub",
+                        highlighted = artifactCount > 0,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onDismiss()
+                            onOpenArtifactHub()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_artifact_hub_button")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Public,
+                        title = if (webhookCount > 0) "Webhooks ($webhookCount)" else "REST Tools",
+                        highlighted = webhookCount > 0,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onDismiss()
+                            onOpenWebhooks()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_webhooks_button")
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolActionCard(
+                        icon = Icons.Rounded.Verified,
+                        title = if (councilModeEnabled) "Council 3x ON" else "Council 3x",
+                        highlighted = councilModeEnabled,
+                        accent = auraColors.sparkleStart,
+                        onClick = {
+                            onToggleCouncilMode()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).testTag("toggle_council_mode")
+                    )
+                    ToolActionCard(
+                        icon = Icons.Rounded.Bolt,
+                        title = if (autopilotCount > 0) "Autopilot ($autopilotCount)" else "Autopilot",
+                        highlighted = autopilotCount > 0,
+                        accent = auraColors.emerald,
+                        onClick = {
+                            onDismiss()
+                            onOpenAutopilot()
+                        },
+                        modifier = Modifier.weight(1f).testTag("tools_autopilot_button")
                     )
                 }
 

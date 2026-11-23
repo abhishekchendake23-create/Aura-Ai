@@ -35,10 +35,30 @@ object KnowledgeRagEngine {
         "been", "being", "than", "then", "also", "more", "some", "such", "only"
     )
 
+    fun normalizeStem(token: String): String {
+        if (token.length <= 4) return token
+        return when {
+            token.endsWith("ations") && token.length > 7 -> token.dropLast(6)
+            token.endsWith("ation") && token.length > 6 -> token.dropLast(5)
+            token.endsWith("ingly") && token.length > 6 -> token.dropLast(5)
+            token.endsWith("edly") && token.length > 5 -> token.dropLast(4)
+            token.endsWith("ment") && token.length > 6 -> token.dropLast(4)
+            token.endsWith("ness") && token.length > 6 -> token.dropLast(4)
+            token.endsWith("ing") && token.length > 5 -> token.dropLast(3)
+            token.endsWith("ies") && token.length > 5 -> token.dropLast(3) + "y"
+            token.endsWith("ed") && token.length > 4 -> token.dropLast(2)
+            token.endsWith("es") && token.length > 4 -> token.dropLast(2)
+            token.endsWith("ly") && token.length > 4 -> token.dropLast(2)
+            token.endsWith("s") && !token.endsWith("ss") && token.length > 4 -> token.dropLast(1)
+            else -> token
+        }
+    }
+
     fun tokenize(text: String): List<String> {
         return text.lowercase()
             .split(Regex("[^\\p{L}\\p{N}]+"))
             .filter { it.length >= 2 && it !in STOP_WORDS }
+            .map { normalizeStem(it) }
     }
 
     fun chunkDocument(
@@ -105,6 +125,7 @@ object KnowledgeRagEngine {
         if (allChunks.isEmpty() || query.isBlank()) return emptyList()
         val queryTokens = tokenize(query)
         if (queryTokens.isEmpty()) return allChunks.take(topK)
+        val queryBigrams = queryTokens.zipWithNext { a, b -> "$a $b" }.toSet()
 
         val docFreq = mutableMapOf<String, Int>()
         val tokenizedDocs = allChunks.map { chunk ->
@@ -122,6 +143,7 @@ object KnowledgeRagEngine {
         val lowerQuery = query.trim().lowercase()
 
         return allChunks.indices.map { idx ->
+            val chunk = allChunks[idx]
             val docTokens = tokenizedDocs[idx]
             val termCounts = docTokens.groupingBy { it }.eachCount()
             val docLen = docTokens.size.toDouble().coerceAtLeast(1.0)
@@ -137,11 +159,23 @@ object KnowledgeRagEngine {
                 }
             }
 
-            if (lowerQuery.length >= 6 && allChunks[idx].content.lowercase().contains(lowerQuery)) {
+            if (queryBigrams.isNotEmpty() && docTokens.size >= 2) {
+                val docBigrams = docTokens.zipWithNext { a, b -> "$a $b" }.toSet()
+                val bigramMatches = queryBigrams.count { it in docBigrams }
+                score += bigramMatches * 1.35
+            }
+
+            val titleTokens = tokenize(chunk.docTitle).toSet()
+            val titleHits = queryTokens.distinct().count { it in titleTokens }
+            if (titleHits > 0) {
+                score += titleHits * 0.9
+            }
+
+            if (lowerQuery.length >= 6 && chunk.content.lowercase().contains(lowerQuery)) {
                 score += 2.5
             }
 
-            allChunks[idx] to score
+            chunk to score
         }
             .filter { it.second > 0.0 }
             .sortedByDescending { it.second }

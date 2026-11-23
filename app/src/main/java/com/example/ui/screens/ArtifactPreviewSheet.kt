@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -12,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,16 +25,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,7 +57,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
@@ -59,14 +67,22 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.repository.AuraPdfExporter
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.delay
 
+enum class ArtifactViewMode(val label: String) {
+    PREVIEW("Preview"),
+    SPLIT("Split"),
+    CODE("Code")
+}
+
 fun isPreviewableArtifactLanguage(language: String): Boolean {
     val clean = language.trim().lowercase().substringBefore(':')
     return when (clean) {
-        "html", "htm", "svg", "mermaid", "js", "javascript", "jsx", "react", "tailwind" -> true
+        "html", "htm", "svg", "mermaid", "js", "javascript", "jsx", "react", "tailwind",
+        "slides", "deck", "csv", "tsv" -> true
         else -> false
     }
 }
@@ -94,14 +110,19 @@ private class AuraArtifactConsoleBridge(
 fun ArtifactPreviewDialog(
     language: String,
     code: String,
+    titleHint: String = "aura_artifact",
     onAutoFixError: ((errorLog: String, code: String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val auraColors = LocalAuraColors.current
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var copied by remember { mutableStateOf(false) }
     var consoleExpanded by remember { mutableStateOf(false) }
-    val consoleEntries = remember(language, code) { mutableStateListOf<ConsoleEntry>() }
+    var viewMode by remember { mutableStateOf(ArtifactViewMode.PREVIEW) }
+    var editableCode by remember(code) { mutableStateOf(code) }
+    var activeCode by remember(code) { mutableStateOf(code) }
+    val consoleEntries = remember(language, activeCode) { mutableStateListOf<ConsoleEntry>() }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -110,8 +131,8 @@ fun ArtifactPreviewDialog(
         }
     }
 
-    val htmlPayload = remember(language, code) {
-        buildArtifactHtml(language = language, code = code)
+    val htmlPayload = remember(language, activeCode) {
+        buildArtifactHtml(language = language, code = activeCode)
     }
     val hasErrors = consoleEntries.any { it.isError }
     val errorSummary = remember(consoleEntries.size) {
@@ -160,12 +181,12 @@ fun ArtifactPreviewDialog(
                     )
                     Column {
                         Text(
-                            text = "Aura Live Artifact · ${language.substringBefore(':').uppercase()}",
+                            text = "Aura Sandbox · ${language.substringBefore(':').uppercase()}",
                             style = MaterialTheme.typography.titleSmall,
                             color = auraColors.codeText
                         )
                         Text(
-                            text = "Sandboxed Interactive Runtime",
+                            text = "Live Editable Runtime",
                             style = MaterialTheme.typography.labelSmall,
                             color = auraColors.emerald
                         )
@@ -173,87 +194,216 @@ fun ArtifactPreviewDialog(
                 }
 
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .clickable {
-                            clipboard.setText(AnnotatedString(code))
-                            copied = true
-                        }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                        contentDescription = "Copy artifact code",
-                        tint = if (copied) auraColors.emerald else auraColors.codeText,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (copied) "Copied" else "Copy",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (copied) auraColors.emerald else auraColors.codeText
-                    )
+                    if (editableCode != activeCode || viewMode != ArtifactViewMode.PREVIEW) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(auraColors.emeraldContainer)
+                                .clickable {
+                                    consoleEntries.clear()
+                                    activeCode = editableCode
+                                    if (viewMode == ArtifactViewMode.CODE) {
+                                        viewMode = ArtifactViewMode.SPLIT
+                                    }
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                .testTag("artifact_rerun_button"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "Re-run modified code",
+                                tint = auraColors.emerald,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "Re-Run",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = auraColors.emerald
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable {
+                                runCatching {
+                                    val uri = AuraPdfExporter.exportHtmlFileUri(
+                                        context = context,
+                                        htmlContent = htmlPayload,
+                                        suggestedTitle = titleHint
+                                    )
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/html"
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        putExtra(Intent.EXTRA_SUBJECT, "Aura AI · $titleHint")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Export .html Artifact"))
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .testTag("artifact_export_html_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = "Export standalone HTML file",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = ".html",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .clickable {
+                                clipboard.setText(AnnotatedString(editableCode))
+                                copied = true
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            contentDescription = "Copy artifact code",
+                            tint = if (copied) auraColors.emerald else auraColors.codeText,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = if (copied) "Copied" else "Copy",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (copied) auraColors.emerald else auraColors.codeText
+                        )
+                    }
+                }
+            }
+
+            // View Mode Switcher: Preview | Split | Code
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(auraColors.codeHeader.copy(alpha = 0.85f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ArtifactViewMode.entries.forEach { mode ->
+                    val selected = mode == viewMode
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceContainer
+                            )
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { viewMode = mode }
+                            .padding(vertical = 7.dp)
+                            .testTag("artifact_mode_${mode.name.lowercase()}"),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (mode == ArtifactViewMode.CODE) Icons.Rounded.Code else Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = if (selected) MaterialTheme.colorScheme.primary else auraColors.codeText.copy(alpha = 0.7f),
+                            modifier = Modifier.size(14.dp).padding(end = 2.dp)
+                        )
+                        Text(
+                            text = mode.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else auraColors.codeText
+                        )
+                    }
                 }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            AndroidView(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        setBackgroundColor(android.graphics.Color.parseColor("#0A0D14"))
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = false
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        @Suppress("DEPRECATION")
-                        settings.allowFileAccessFromFileURLs = false
-                        @Suppress("DEPRECATION")
-                        settings.allowUniversalAccessFromFileURLs = false
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        addJavascriptInterface(
-                            AuraArtifactConsoleBridge { entry ->
-                                post {
-                                    if (consoleEntries.size < 60) {
-                                        consoleEntries.add(entry)
-                                        if (entry.isError) consoleExpanded = true
-                                    }
-                                }
-                            },
-                            "AuraConsoleBridge"
-                        )
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                                val msg = consoleMessage?.message()?.trim().orEmpty()
-                                if (msg.isNotBlank()) {
-                                    val isErr = consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR
-                                    val lvl = consoleMessage?.messageLevel()?.name ?: "LOG"
+            if (viewMode == ArtifactViewMode.PREVIEW || viewMode == ArtifactViewMode.SPLIT) {
+                AndroidView(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            setBackgroundColor(android.graphics.Color.parseColor("#0A0D14"))
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = false
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            @Suppress("DEPRECATION")
+                            settings.allowFileAccessFromFileURLs = false
+                            @Suppress("DEPRECATION")
+                            settings.allowUniversalAccessFromFileURLs = false
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            addJavascriptInterface(
+                                AuraArtifactConsoleBridge { entry ->
                                     post {
                                         if (consoleEntries.size < 60) {
-                                            consoleEntries.add(ConsoleEntry(lvl, msg, isErr))
-                                            if (isErr) consoleExpanded = true
+                                            consoleEntries.add(entry)
+                                            if (entry.isError) consoleExpanded = true
                                         }
                                     }
+                                },
+                                "AuraConsoleBridge"
+                            )
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                    val msg = consoleMessage?.message()?.trim().orEmpty()
+                                    if (msg.isNotBlank()) {
+                                        val isErr = consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR
+                                        val lvl = consoleMessage?.messageLevel()?.name ?: "LOG"
+                                        post {
+                                            if (consoleEntries.size < 60) {
+                                                consoleEntries.add(ConsoleEntry(lvl, msg, isErr))
+                                                if (isErr) consoleExpanded = true
+                                            }
+                                        }
+                                    }
+                                    return true
                                 }
-                                return true
                             }
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): Boolean {
-                                val targetUrl = request?.url?.toString().orEmpty()
-                                return !targetUrl.startsWith("https://aura.local/")
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    val targetUrl = request?.url?.toString().orEmpty()
+                                    return !targetUrl.startsWith("https://aura.local/")
+                                }
                             }
+                            loadDataWithBaseURL(
+                                "https://aura.local/",
+                                htmlPayload,
+                                "text/html",
+                                "UTF-8",
+                                null
+                            )
                         }
-                        loadDataWithBaseURL(
+                    },
+                    update = { webView ->
+                        webView.loadDataWithBaseURL(
                             "https://aura.local/",
                             htmlPayload,
                             "text/html",
@@ -261,17 +411,38 @@ fun ArtifactPreviewDialog(
                             null
                         )
                     }
-                },
-                update = { webView ->
-                    webView.loadDataWithBaseURL(
-                        "https://aura.local/",
-                        htmlPayload,
-                        "text/html",
-                        "UTF-8",
-                        null
+                )
+            }
+
+            if (viewMode == ArtifactViewMode.SPLIT) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+
+            if (viewMode == ArtifactViewMode.CODE || viewMode == ArtifactViewMode.SPLIT) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(auraColors.codeBackground)
+                        .verticalScroll(rememberScrollState())
+                        .padding(14.dp)
+                ) {
+                    BasicTextField(
+                        value = editableCode,
+                        onValueChange = { editableCode = it },
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = JetBrainsMonoFamily,
+                            fontSize = 12.5.sp,
+                            lineHeight = 19.sp,
+                            color = auraColors.codeText
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("artifact_code_editor")
                     )
                 }
-            )
+            }
 
             // Live Console & Error Auto-Fix Bar
             if (consoleEntries.isNotEmpty() || onAutoFixError != null) {
@@ -322,7 +493,7 @@ fun ArtifactPreviewDialog(
                                 Button(
                                     onClick = {
                                         onDismiss()
-                                        onAutoFixError(errorSummary.ifBlank { "Runtime error inside artifact preview" }, code)
+                                        onAutoFixError(errorSummary.ifBlank { "Runtime error inside artifact preview" }, activeCode)
                                     },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.error,
@@ -601,6 +772,272 @@ fun buildArtifactHtml(language: String, code: String): String {
                   });
                   svg += '</svg>';
                   canvas.innerHTML = svg;
+                })();
+              </script>
+            </body>
+            </html>
+            """.trimIndent()
+        }
+
+        "slides", "deck" -> {
+            val escapedSlides = org.json.JSONObject.quote(code)
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              $CONSOLE_SHIM_SCRIPT
+              <style>
+                * { box-sizing: border-box; }
+                html, body { margin: 0; padding: 0; background: #070A10; color: #F2F6FF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+                .topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #1E2840; background: #0C111C; }
+                .brand { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7AA2FF; }
+                .counter { font-size: 12px; font-weight: 600; color: #9EF5C8; background: #122823; padding: 4px 10px; border-radius: 999px; border: 1px solid #245B4D; }
+                .stage { flex: 1; display: flex; align-items: center; justify-content: center; padding: 18px; }
+                .card { width: 100%; max-width: 680px; min-height: 320px; background: linear-gradient(155deg, #101727 0%, #0B0F1A 100%); border: 1px solid #283556; border-radius: 22px; padding: 28px 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.65); display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+                .card h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.25; color: #FFFFFF; }
+                .card h2 { margin: 0 0 4px; font-size: 19px; line-height: 1.3; color: #A6C2FF; }
+                .card p { margin: 0; font-size: 15px; line-height: 1.55; color: #D4DEF2; }
+                .card ul { margin: 4px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+                .card li { font-size: 15px; line-height: 1.5; color: #E2EBFF; }
+                .card code { background: #18233C; color: #9EF5C8; padding: 2px 6px; border-radius: 6px; font-family: monospace; font-size: 13px; }
+                .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-top: 1px solid #1E2840; background: #0C111C; }
+                button { background: #1A2540; color: #F2F6FF; border: 1px solid #354B7D; border-radius: 12px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+                button:disabled { opacity: 0.35; cursor: default; }
+                .dots { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+                .dot { width: 8px; height: 8px; border-radius: 50%; background: #2A3754; cursor: pointer; }
+                .dot.active { background: #7AA2FF; transform: scale(1.2); }
+              </style>
+            </head>
+            <body>
+              <div class="topbar">
+                <div class="brand">Aura Deck Studio</div>
+                <div class="counter" id="counter">Slide 1 / 1</div>
+              </div>
+              <div class="stage">
+                <div class="card" id="slideCard"></div>
+              </div>
+              <div class="controls">
+                <button id="prevBtn">← Prev</button>
+                <div class="dots" id="dots"></div>
+                <button id="nextBtn">Next →</button>
+              </div>
+              <script>
+                (function() {
+                  const raw = $escapedSlides;
+                  const chunks = raw.split(/^\s*---\s*$/m).map(s => s.trim()).filter(Boolean);
+                  const slides = chunks.length ? chunks : [raw];
+                  let idx = 0;
+                  function esc(s) {
+                    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                  }
+                  function fmtInline(s) {
+                    return esc(s)
+                      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                      .replace(/`([^`]+)`/g, '<code>$1</code>');
+                  }
+                  function renderSlide(text) {
+                    const lines = text.split('\n');
+                    let html = '';
+                    let inList = false;
+                    for (const lineRaw of lines) {
+                      const line = lineRaw.trim();
+                      if (!line) {
+                        if (inList) { html += '</ul>'; inList = false; }
+                        continue;
+                      }
+                      if (/^#\s+/.test(line)) {
+                        if (inList) { html += '</ul>'; inList = false; }
+                        html += '<h1>' + fmtInline(line.replace(/^#\s+/, '')) + '</h1>';
+                      } else if (/^#{2,3}\s+/.test(line)) {
+                        if (inList) { html += '</ul>'; inList = false; }
+                        html += '<h2>' + fmtInline(line.replace(/^#{2,3}\s+/, '')) + '</h2>';
+                      } else if (/^[-*•]\s+/.test(line)) {
+                        if (!inList) { html += '<ul>'; inList = true; }
+                        html += '<li>' + fmtInline(line.replace(/^[-*•]\s+/, '')) + '</li>';
+                      } else {
+                        if (inList) { html += '</ul>'; inList = false; }
+                        html += '<p>' + fmtInline(line) + '</p>';
+                      }
+                    }
+                    if (inList) html += '</ul>';
+                    return html;
+                  }
+                  function update() {
+                    document.getElementById('slideCard').innerHTML = renderSlide(slides[idx]);
+                    document.getElementById('counter').textContent = 'Slide ' + (idx + 1) + ' / ' + slides.length;
+                    document.getElementById('prevBtn').disabled = idx === 0;
+                    document.getElementById('nextBtn').disabled = idx >= slides.length - 1;
+                    const dotsEl = document.getElementById('dots');
+                    dotsEl.innerHTML = '';
+                    slides.forEach((_, i) => {
+                      const d = document.createElement('div');
+                      d.className = 'dot' + (i === idx ? ' active' : '');
+                      d.onclick = () => { idx = i; update(); };
+                      dotsEl.appendChild(d);
+                    });
+                  }
+                  document.getElementById('prevBtn').onclick = () => { if (idx > 0) { idx--; update(); } };
+                  document.getElementById('nextBtn').onclick = () => { if (idx < slides.length - 1) { idx++; update(); } };
+                  document.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowRight' && idx < slides.length - 1) { idx++; update(); }
+                    if (e.key === 'ArrowLeft' && idx > 0) { idx--; update(); }
+                  });
+                  update();
+                })();
+              </script>
+            </body>
+            </html>
+            """.trimIndent()
+        }
+
+        "csv", "tsv" -> {
+            val escapedData = org.json.JSONObject.quote(code)
+            val isTsv = lang == "tsv"
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              $CONSOLE_SHIM_SCRIPT
+              <style>
+                * { box-sizing: border-box; }
+                html, body { margin: 0; padding: 14px; background: #070A10; color: #EDF2FF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+                .badge { display: inline-block; padding: 4px 10px; border-radius: 10px; background: #14223B; color: #7AA2FF; font-size: 12px; font-weight: 700; margin-bottom: 12px; }
+                .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
+                .metric { background: #101625; border: 1px solid #24304D; border-radius: 12px; padding: 10px 12px; }
+                .metric .k { font-size: 11px; color: #8A99BA; text-transform: uppercase; }
+                .metric .v { font-size: 16px; font-weight: 700; color: #9EF5C8; margin-top: 2px; }
+                .chartBox { background: #0E1422; border: 1px solid #24304D; border-radius: 14px; padding: 12px; margin-bottom: 14px; overflow-x: auto; }
+                .tableWrap { background: #0E1422; border: 1px solid #24304D; border-radius: 14px; overflow-x: auto; }
+                table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+                th { background: #162038; color: #A6C2FF; text-align: left; padding: 10px 12px; cursor: pointer; user-select: none; border-bottom: 1px solid #2A385C; white-space: nowrap; }
+                td { padding: 8px 12px; border-bottom: 1px solid #1A233A; color: #E2EAFF; white-space: nowrap; }
+                tr:hover td { background: #121B30; }
+              </style>
+            </head>
+            <body>
+              <div class="badge">Aura Dataset Visualizer · ${if (isTsv) "TSV" else "CSV"}</div>
+              <div class="metrics" id="metrics"></div>
+              <div class="chartBox" id="chartBox"></div>
+              <div class="tableWrap" id="tableWrap"></div>
+              <script>
+                (function() {
+                  const raw = $escapedData;
+                  const delim = ${if (isTsv) "'\\t'" else "','"};
+                  function parseDelimited(text, d) {
+                    const rows = [];
+                    let row = [], cell = '', inQ = false;
+                    for (let i = 0; i < text.length; i++) {
+                      const ch = text[i];
+                      if (ch === '"') {
+                        if (inQ && text[i+1] === '"') { cell += '"'; i++; }
+                        else inQ = !inQ;
+                      } else if (ch === d && !inQ) {
+                        row.push(cell.trim()); cell = '';
+                      } else if ((ch === '\n' || ch === '\r') && !inQ) {
+                        if (ch === '\r' && text[i+1] === '\n') i++;
+                        row.push(cell.trim());
+                        if (row.some(c => c.length > 0)) rows.push(row);
+                        row = []; cell = '';
+                      } else {
+                        cell += ch;
+                      }
+                    }
+                    if (cell.length > 0 || row.length > 0) {
+                      row.push(cell.trim());
+                      if (row.some(c => c.length > 0)) rows.push(row);
+                    }
+                    return rows;
+                  }
+                  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+                  const parsed = parseDelimited(raw, delim);
+                  if (parsed.length === 0) {
+                    document.getElementById('tableWrap').innerHTML = '<div style="padding:14px;color:#9BA7C2">Empty dataset</div>';
+                    return;
+                  }
+                  const headers = parsed[0];
+                  let dataRows = parsed.slice(1);
+                  let sortCol = -1, sortAsc = true;
+                  let numCol = -1;
+                  for (let c = 0; c < headers.length; c++) {
+                    const nums = dataRows.map(r => Number(String(r[c] || '').replace(/[$,%]/g, ''))).filter(n => !Number.isNaN(n));
+                    if (nums.length > 0 && nums.length >= dataRows.length * 0.5) { numCol = c; break; }
+                  }
+                  function renderMetrics() {
+                    let html = '<div class="metric"><div class="k">Rows</div><div class="v">' + dataRows.length + '</div></div>';
+                    html += '<div class="metric"><div class="k">Columns</div><div class="v">' + headers.length + '</div></div>';
+                    if (numCol >= 0) {
+                      const vals = dataRows.map(r => Number(String(r[numCol] || '').replace(/[$,%]/g, ''))).filter(n => !Number.isNaN(n));
+                      if (vals.length) {
+                        const sum = vals.reduce((a,b) => a + b, 0);
+                        const avg = (sum / vals.length).toFixed(2);
+                        const maxV = Math.max(...vals);
+                        html += '<div class="metric"><div class="k">' + esc(headers[numCol]) + ' Avg</div><div class="v">' + avg + '</div></div>';
+                        html += '<div class="metric"><div class="k">' + esc(headers[numCol]) + ' Max</div><div class="v">' + maxV + '</div></div>';
+                      }
+                    }
+                    document.getElementById('metrics').innerHTML = html;
+                  }
+                  function renderChart() {
+                    const box = document.getElementById('chartBox');
+                    if (numCol < 0 || dataRows.length === 0) {
+                      box.style.display = 'none';
+                      return;
+                    }
+                    const items = dataRows.slice(0, 14).map((r, i) => ({
+                      label: String(r[0] || ('Row ' + (i+1))).slice(0, 12),
+                      val: Number(String(r[numCol] || '0').replace(/[$,%]/g, '')) || 0
+                    }));
+                    const maxV = Math.max(1, ...items.map(x => Math.abs(x.val)));
+                    const barW = 28, gap = 12, padL = 16, h = 150, w = Math.max(300, padL * 2 + items.length * (barW + gap));
+                    let svg = '<div style="font-size:12px;color:#A6C2FF;font-weight:600;margin-bottom:8px;">Bar Chart · ' + esc(headers[numCol]) + '</div>';
+                    svg += '<svg width="' + w + '" height="' + (h + 32) + '" viewBox="0 0 ' + w + ' ' + (h + 32) + '">';
+                    items.forEach((it, i) => {
+                      const bh = Math.max(4, Math.round((Math.abs(it.val) / maxV) * (h - 24)));
+                      const x = padL + i * (barW + gap);
+                      const y = h - bh;
+                      svg += '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + bh + '" rx="6" fill="#5D87FF"/>';
+                      svg += '<text x="' + (x + barW/2) + '" y="' + (y - 4) + '" text-anchor="middle" fill="#9EF5C8" font-size="9">' + it.val + '</text>';
+                      svg += '<text x="' + (x + barW/2) + '" y="' + (h + 16) + '" text-anchor="middle" fill="#9BA7C2" font-size="9">' + esc(it.label) + '</text>';
+                    });
+                    svg += '</svg>';
+                    box.innerHTML = svg;
+                  }
+                  function renderTable() {
+                    let t = '<table><thead><tr>';
+                    headers.forEach((h, i) => {
+                      const ind = sortCol === i ? (sortAsc ? ' ↑' : ' ↓') : '';
+                      t += '<th data-col="' + i + '">' + esc(h) + ind + '</th>';
+                    });
+                    t += '</tr></thead><tbody>';
+                    dataRows.forEach(r => {
+                      t += '<tr>';
+                      for (let i = 0; i < headers.length; i++) t += '<td>' + esc(r[i] || '') + '</td>';
+                      t += '</tr>';
+                    });
+                    t += '</tbody></table>';
+                    const wrap = document.getElementById('tableWrap');
+                    wrap.innerHTML = t;
+                    wrap.querySelectorAll('th').forEach(th => {
+                      th.onclick = () => {
+                        const c = Number(th.getAttribute('data-col'));
+                        if (sortCol === c) sortAsc = !sortAsc; else { sortCol = c; sortAsc = true; }
+                        dataRows.sort((a, b) => {
+                          const av = a[c] || '', bv = b[c] || '';
+                          const an = Number(av.replace(/[$,%]/g, '')), bn = Number(bv.replace(/[$,%]/g, ''));
+                          if (!Number.isNaN(an) && !Number.isNaN(bn) && av !== '' && bv !== '') {
+                            return sortAsc ? an - bn : bn - an;
+                          }
+                          return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+                        });
+                        renderTable();
+                      };
+                    });
+                  }
+                  renderMetrics();
+                  renderChart();
+                  renderTable();
                 })();
               </script>
             </body>

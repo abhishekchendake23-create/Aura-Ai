@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import android.content.Intent
 import android.net.Uri
+import android.provider.CalendarContract
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -30,13 +32,17 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
@@ -44,6 +50,7 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -58,6 +65,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +73,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -75,10 +84,16 @@ import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.MessageEntity
 import com.example.data.local.parseMessageVariants
+import com.example.data.repository.NativeActionChip
+import com.example.data.repository.NativeActionExtractor
+import com.example.data.repository.ProjectZipExporter
 import com.example.data.repository.parseSources
 import com.example.ui.StreamingMessageState
 import com.example.ui.theme.LocalAuraColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -220,16 +235,21 @@ fun AssistantMessageBlock(
     onSaveToMemory: (String) -> Unit = {},
     onTogglePin: () -> Unit = {},
     onSelectVariant: (Int) -> Unit = {},
+    onLockArenaWinner: (Int) -> Unit = {},
+    onForkHere: () -> Unit = {},
     onExportPdf: () -> Unit = {},
     onAutoFixArtifactError: (errorLog: String, code: String) -> Unit = { _, _ -> },
     onShare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val auraColors = LocalAuraColors.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
     val sources = remember(message.sourcesJson) { parseSources(message.sourcesJson) }
     val variants = remember(message.variantsJson) { parseMessageVariants(message.variantsJson) }
+    val namedFiles = remember(message.content) { ProjectZipExporter.extractNamedFilesFromMarkdown(message.content) }
     var copied by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
@@ -250,7 +270,11 @@ fun AssistantMessageBlock(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val headerTitle = if (!message.generatedImagePath.isNullOrBlank()) "Aura Imagine" else "Aura AI"
+            val headerTitle = when {
+                !message.generatedImagePath.isNullOrBlank() -> "Aura Imagine"
+                message.modelDisplayName == "Aura Arena" -> "Aura Arena"
+                else -> "Aura AI"
+            }
             AssistantHeaderRow(modelName = headerTitle, isStreaming = false)
 
             if (variants.size > 1) {
@@ -289,6 +313,68 @@ fun AssistantMessageBlock(
                             imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                             contentDescription = "Next answer version",
                             modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (message.modelDisplayName == "Aura Arena" && variants.size >= 2) {
+            val activeIdx = message.selectedVariantIndex.coerceIn(0, variants.lastIndex)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                variants.forEachIndexed { idx, variant ->
+                    val label = variant.engineLabel?.takeIf { it.isNotBlank() } ?: "Engine ${idx + 1}"
+                    val selected = idx == activeIdx
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onSelectVariant(idx) }
+                            .testTag("arena_tab_${message.id}_$idx")
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = auraColors.emeraldContainer,
+                    modifier = Modifier
+                        .border(1.dp, auraColors.emerald.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                        .clickable { onLockArenaWinner(activeIdx) }
+                        .testTag("arena_lock_winner_${message.id}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Verified,
+                            contentDescription = "Lock active Arena response as final",
+                            tint = auraColors.emerald,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Lock Winner",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = auraColors.emerald
                         )
                     }
                 }
@@ -608,6 +694,151 @@ fun AssistantMessageBlock(
                         modifier = Modifier.size(19.dp)
                     )
                 }
+
+                IconButton(
+                    onClick = onForkHere,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("fork_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.NoteAdd,
+                        contentDescription = "Fork conversation branch from here",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        val nativeActions = remember(message.id, message.content) {
+            if (!message.isError && message.content.isNotBlank()) {
+                NativeActionExtractor.extractActions(message.content)
+            } else emptyList()
+        }
+        if (nativeActions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                nativeActions.forEach { action ->
+                    val (actionIcon, label) = when (action) {
+                        is NativeActionChip.DraftEmail -> Icons.Rounded.Email to action.label
+                        is NativeActionChip.AddCalendarEvent -> Icons.Rounded.AutoAwesome to action.label
+                        is NativeActionChip.OpenLink -> Icons.AutoMirrored.Rounded.OpenInNew to action.label
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                            .clickable {
+                                runCatching {
+                                    when (action) {
+                                        is NativeActionChip.DraftEmail -> {
+                                            val toAddr = action.toAddress
+                                            val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                                data = Uri.parse("mailto:")
+                                                if (!toAddr.isNullOrBlank()) {
+                                                    putExtra(Intent.EXTRA_EMAIL, arrayOf(toAddr))
+                                                }
+                                                putExtra(Intent.EXTRA_SUBJECT, action.subject)
+                                                putExtra(Intent.EXTRA_TEXT, action.body)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                        is NativeActionChip.AddCalendarEvent -> {
+                                            val intent = Intent(Intent.ACTION_INSERT).apply {
+                                                data = CalendarContract.Events.CONTENT_URI
+                                                putExtra(CalendarContract.Events.TITLE, action.title)
+                                                putExtra(CalendarContract.Events.DESCRIPTION, action.description)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                        is NativeActionChip.OpenLink -> {
+                                            uriHandler.openUri(action.url)
+                                        }
+                                    }
+                                }
+                            }
+                            .testTag("native_action_chip")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = actionIcon,
+                                contentDescription = label,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (namedFiles.size >= 2) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = auraColors.emerald.copy(alpha = 0.14f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(
+                        1.dp,
+                        auraColors.emerald.copy(alpha = 0.55f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .clickable {
+                        scope.launch {
+                            runCatching {
+                                val (uri, fileCount) = withContext(Dispatchers.IO) {
+                                    ProjectZipExporter.exportMultiFileProjectZipUri(
+                                        context = context,
+                                        markdown = message.content,
+                                        projectName = "aura_project"
+                                    )
+                                }
+                                val zipIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/zip"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    putExtra(Intent.EXTRA_SUBJECT, "aura_project ($fileCount files)")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(zipIntent, "Export $fileCount project files (.zip)")
+                                )
+                            }
+                        }
+                    }
+                    .testTag("export_zip_project_${message.id}")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Download,
+                        contentDescription = null,
+                        tint = auraColors.emerald,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Export .zip (${namedFiles.size} files)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = auraColors.emerald
+                    )
+                }
             }
         }
 
@@ -689,7 +920,11 @@ fun StreamingAssistantBlock(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        val streamHeaderName = if (streaming.isGeneratingImage) "Aura Imagine" else "Aura AI"
+        val streamHeaderName = when {
+            streaming.isGeneratingImage -> "Aura Imagine"
+            streaming.isCompareArena -> "Aura Arena"
+            else -> "Aura AI"
+        }
         AssistantHeaderRow(modelName = streamHeaderName, isStreaming = true)
 
         if (streaming.isGeneratingImage) {
@@ -732,6 +967,62 @@ fun StreamingAssistantBlock(
                 durationMs = streaming.thinkingDurationMs,
                 isActiveThinking = streaming.isThinkingPhase
             )
+        }
+
+        if (streaming.isCompareArena) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "ENGINE ALPHA",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (streaming.compareAlphaText.isNotBlank()) {
+                            MarkdownRenderer(markdown = streaming.compareAlphaText, isStreaming = true)
+                        } else {
+                            Text(
+                                text = "Streaming Engine Alpha…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.alpha(pulseAlpha)
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, LocalAuraColors.current.emerald.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "ENGINE BETA",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LocalAuraColors.current.emerald
+                        )
+                        if (streaming.compareBetaText.isNotBlank()) {
+                            MarkdownRenderer(markdown = streaming.compareBetaText, isStreaming = true)
+                        } else {
+                            Text(
+                                text = "Streaming Engine Beta…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.alpha(pulseAlpha)
+                            )
+                        }
+                    }
+                }
+            }
+            return@Column
         }
 
         if (streaming.contentText.isNotBlank()) {
