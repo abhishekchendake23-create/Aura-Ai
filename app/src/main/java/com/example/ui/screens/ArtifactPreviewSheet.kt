@@ -19,15 +19,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -67,7 +70,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.R
 import com.example.data.repository.AuraPdfExporter
+import com.example.data.repository.ProjectZipExporter
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.delay
@@ -112,6 +117,7 @@ fun ArtifactPreviewDialog(
     code: String,
     titleHint: String = "aura_artifact",
     onAutoFixError: ((errorLog: String, code: String) -> Unit)? = null,
+    onIterateApp: ((instruction: String, currentCode: String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val auraColors = LocalAuraColors.current
@@ -122,6 +128,7 @@ fun ArtifactPreviewDialog(
     var viewMode by remember { mutableStateOf(ArtifactViewMode.PREVIEW) }
     var editableCode by remember(code) { mutableStateOf(code) }
     var activeCode by remember(code) { mutableStateOf(code) }
+    var iterateText by remember { mutableStateOf("") }
     val consoleEntries = remember(language, activeCode) { mutableStateListOf<ConsoleEntry>() }
 
     LaunchedEffect(copied) {
@@ -152,6 +159,7 @@ fun ArtifactPreviewDialog(
                 .background(auraColors.codeBackground)
                 .statusBarsPadding()
                 .navigationBarsPadding()
+                .imePadding()
         ) {
             Row(
                 modifier = Modifier
@@ -263,6 +271,46 @@ fun ArtifactPreviewDialog(
                             text = ".html",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(auraColors.emeraldContainer)
+                            .clickable {
+                                runCatching {
+                                    val (uri, zipName) = ProjectZipExporter.exportAndroidApkProjectZipUri(
+                                        context = context,
+                                        appName = titleHint,
+                                        htmlCode = htmlPayload
+                                    )
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/zip"
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        putExtra(Intent.EXTRA_SUBJECT, "$titleHint Android APK Project ($zipName)")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(shareIntent, "Download Android APK Project (.zip)")
+                                    )
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .testTag("artifact_export_apk_zip_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = "Download Android APK Project ZIP",
+                            tint = auraColors.emerald,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "APK",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = auraColors.emerald
                         )
                     }
 
@@ -539,6 +587,79 @@ fun ArtifactPreviewDialog(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // Live App Modification Bar (AI Studio / Claude Artifacts Iteration)
+            if (onIterateApp != null) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(auraColors.codeHeader)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(18.dp)
+                            )
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        if (iterateText.isEmpty()) {
+                            Text(
+                                text = "Modify this app (e.g. add dark chart, sound, export)...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        BasicTextField(
+                            value = iterateText,
+                            onValueChange = { iterateText = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("artifact_iterate_input")
+                        )
+                    }
+                    val canSubmit = iterateText.isNotBlank()
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canSubmit) auraColors.amber
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .clickable(enabled = canSubmit) {
+                                val cmd = iterateText.trim()
+                                iterateText = ""
+                                onDismiss()
+                                onIterateApp(cmd, activeCode)
+                            }
+                            .testTag("artifact_iterate_send"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowUpward,
+                            contentDescription = "Apply modification to live app",
+                            tint = if (canSubmit) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }

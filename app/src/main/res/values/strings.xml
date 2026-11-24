@@ -16,7 +16,7 @@
     <string name="cd_regenerate">Regenerate response</string>
     <string name="cd_bookmark">Save to library</string>
     <string name="cd_share">Share response</string>
-    <string name="composer_placeholder">Ask Aura AI...</string>
+    <string name="composer_placeholder">Ask me anything…</string>
     <string name="composer_image_placeholder">Describe the image to create with Aura AI...</string>
     <string name="widget_description">Quick shortcuts to Ask Aura AI, start Live Voice, or scan papers</string>
     <string name="cd_camera_eye">Toggle live camera vision</string>

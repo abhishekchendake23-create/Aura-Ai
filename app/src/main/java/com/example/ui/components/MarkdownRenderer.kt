@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -96,13 +97,38 @@ fun MarkdownRenderer(
 ) {
     val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
 
-    SelectionContainer(modifier = modifier) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            blocks.forEachIndexed { index, block ->
-                val isTailStreamingBlock = isStreaming && index == blocks.lastIndex
+    if (isStreaming) {
+        MarkdownBlocksColumn(
+            blocks = blocks,
+            isStreaming = true,
+            onAutoFixArtifactError = onAutoFixArtifactError,
+            modifier = modifier
+        )
+    } else {
+        SelectionContainer(modifier = modifier) {
+            MarkdownBlocksColumn(
+                blocks = blocks,
+                isStreaming = false,
+                onAutoFixArtifactError = onAutoFixArtifactError
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarkdownBlocksColumn(
+    blocks: List<MdBlock>,
+    isStreaming: Boolean,
+    onAutoFixArtifactError: (errorLog: String, code: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        blocks.forEachIndexed { index, block ->
+            val isTailStreamingBlock = isStreaming && index == blocks.lastIndex
+            key(index) {
                 when (block) {
                     is MdBlock.Heading -> {
                         val style = when (block.level) {
@@ -435,11 +461,11 @@ private fun CodeBlockCard(
 
     val highlightedCode by produceState(
         initialValue = plainAnnotated,
-        key1 = code,
-        key2 = cleanLang,
-        key3 = isLiveStreaming
+        key1 = isLiveStreaming,
+        key2 = if (isLiveStreaming) "" else code,
+        key3 = cleanLang
     ) {
-        if (isLiveStreaming && code.length > 900) {
+        if (isLiveStreaming) {
             value = plainAnnotated
         } else if (code.length <= 900) {
             value = if (isDiff) {

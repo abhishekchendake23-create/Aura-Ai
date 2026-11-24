@@ -75,6 +75,12 @@ sealed interface AppDestination {
     data object LiveVoice : AppDestination
 }
 
+data class ArtifactLaunchPayload(
+    val title: String,
+    val language: String,
+    val code: String
+)
+
 data class StreamingMessageState(
     val messageId: String,
     val conversationId: String,
@@ -151,6 +157,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _runningAutopilotTaskId = MutableStateFlow<String?>(null)
     val runningAutopilotTaskId: StateFlow<String?> = _runningAutopilotTaskId.asStateFlow()
 
+    private val _autoLaunchArtifactPreview = MutableStateFlow<ArtifactLaunchPayload?>(null)
+    val autoLaunchArtifactPreview: StateFlow<ArtifactLaunchPayload?> = _autoLaunchArtifactPreview.asStateFlow()
+
     private var activeGenerationJob: Job? = null
     private var liveVoiceJob: Job? = null
     private var tts: TextToSpeech? = null
@@ -205,6 +214,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     val compareArenaEnabled: StateFlow<Boolean> = prefs.compareArenaEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    val appBuilderEnabled: StateFlow<Boolean> = prefs.appBuilderEnabled.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = false
@@ -844,6 +859,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             prefs.setDefaultCapability(command.suggestedMode)
+            if (command.trigger == "/app") {
+                prefs.setAppBuilderEnabled(true)
+            }
             if (command.trigger == "/agent") {
                 prefs.setAutonomousAgentEnabled(true)
             }
@@ -1151,6 +1169,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun iterateBuiltApp(instruction: String, currentCode: String) {
+        val cleanInst = instruction.trim()
+        val trimmedCode = currentCode.trim().take(18000)
+        if (cleanInst.isBlank() || trimmedCode.isBlank()) return
+        val updatePrompt = buildString {
+            append("Update and improve this interactive HTML app based on the user's request.\n")
+            append("Request: ").append(cleanInst).append("\n\n")
+            append("Return the complete, updated, self-contained HTML5/CSS3/JS application inside a single ```html code block.\n\n")
+            append("Current App Code:\n```html\n").append(trimmedCode).append("\n```")
+        }
+        sendPrompt(
+            overridePrompt = updatePrompt,
+            overrideMode = CapabilityMode.CODE_ARCHITECT
+        )
+    }
+
+    fun consumeAutoLaunchArtifact() {
+        _autoLaunchArtifactPreview.value = null
+    }
+
     private suspend fun buildAttachmentFromMessage(userMessage: MessageEntity): AttachmentDraft? {
         if (userMessage.attachmentName == null || userMessage.attachmentUri == null) return null
         val textSnippet = if (!userMessage.isImageAttachment) {
@@ -1233,9 +1271,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val assistantMsgId = targetMessageId ?: UUID.randomUUID().toString()
         val isArenaActive = compareArenaEnabled.value && !model.isImageModel
         val isAgentActive = autonomousAgentEnabled.value && !model.isImageModel
+        val isAppBuilderActive = (appBuilderEnabled.value || DirectGeminiAiRepository.isAppBuildIntent(prompt)) &&
+            !model.isImageModel &&
+            !isArenaActive &&
+            !codeExecutionEnabled.value &&
+            capability != CapabilityMode.DEEP_RESEARCH
         val auraHeaderLabel = when {
             model.isImageModel -> "Aura Imagine"
             isArenaActive -> "Aura Arena"
+            isAppBuilderActive -> "Aura Builder"
             else -> "Aura AI"
         }
         _streamingState.value = StreamingMessageState(
@@ -1252,7 +1296,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     model.isDeepSeekTier ||
                     selfVerifyEnabled.value ||
                     councilModeEnabled.value ||
-                    isAgentActive
+                    isAgentActive ||
+                    isAppBuilderActive
                 ),
             isGeneratingImage = model.isImageModel,
             isCompareArena = isArenaActive
@@ -1322,7 +1367,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             webhookContextBlock = webhookContextBlock,
             webhookLogPrefix = webhookLogPrefix,
             enableAutonomousAgent = isAgentActive,
-            enableCompareArena = isArenaActive
+            enableCompareArena = isArenaActive,
+            enableAppBuilder = appBuilderEnabled.value && !model.isImageModel
         )
 
         try {
@@ -1441,6 +1487,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 messageId = assistantMsgId,
                                 markdownContent = displayContent
                             )
+                            if (isAppBuilderActive) {
+                                DirectGeminiAiRepository.extractPrimaryHtmlArtifact(displayContent)?.let { (appTitle, htmlCode) ->
+                                    _autoLaunchArtifactPreview.value = ArtifactLaunchPayload(
+                                        title = appTitle,
+                                        language = "html",
+                                        code = htmlCode
+                                    )
+                                }
+                            }
                         }
                         if (liveReadoutActive && spokenCursor < displayContent.length) {
                             val tail = sanitizeForSpeech(displayContent.substring(spokenCursor))
@@ -1911,6 +1966,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleAppBuilderMode() {
+        viewModelScope.launch {
+            val next = !appBuilderEnabled.value
+            prefs.setAppBuilderEnabled(next)
+            _bannerMessage.value = if (next) {
+                "Auto App Builder ON — describe any app and Aura builds & runs it live"
+            } else {
+                "Auto App Builder OFF"
+            }
+        }
+    }
+
     fun setWorkbenchTemperature(value: Float) {
         viewModelScope.launch { prefs.setWorkbenchTemperature(value) }
     }
@@ -2041,7 +2108,58 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Versioned Artifact Hub ---
+    // --- Versioned Artifact Hub & Self-Built App Shortcuts ---
+    fun pinBuiltAppShortcut(title: String, htmlCode: String) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                com.example.service.AppShortcutHelper.pinBuiltAppToHomeScreen(
+                    context = getApplication(),
+                    appTitle = title,
+                    htmlCode = htmlCode
+                )
+            }
+            _bannerMessage.value = if (ok) {
+                "Shortcut request sent — confirm Add on your Home Screen"
+            } else {
+                "Home Screen shortcuts not supported on this launcher"
+            }
+        }
+    }
+
+    fun openPinnedAppShortcut(
+        artifactId: String?,
+        fallbackTitle: String?,
+        fallbackFilePath: String?
+    ) {
+        viewModelScope.launch {
+            navigateTo(AppDestination.Chat)
+            val fromFile = withContext(Dispatchers.IO) {
+                fallbackFilePath?.let { path ->
+                    val f = File(path)
+                    if (f.exists()) f.readText(Charsets.UTF_8) else null
+                }
+            }
+            if (!fromFile.isNullOrBlank()) {
+                _autoLaunchArtifactPreview.value = ArtifactLaunchPayload(
+                    title = fallbackTitle?.ifBlank { null } ?: "Aura App",
+                    language = "html",
+                    code = fromFile
+                )
+                return@launch
+            }
+            if (!artifactId.isNullOrBlank()) {
+                val artifact = chatRepository.getArtifactById(artifactId)
+                if (artifact != null) {
+                    _autoLaunchArtifactPreview.value = ArtifactLaunchPayload(
+                        title = artifact.title,
+                        language = artifact.language,
+                        code = artifact.code
+                    )
+                }
+            }
+        }
+    }
+
     fun deleteArtifact(id: String) {
         viewModelScope.launch {
             chatRepository.deleteArtifact(id)

@@ -28,12 +28,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.FolderShared
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
@@ -59,7 +60,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,7 +70,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.local.MessageEntity
@@ -75,6 +81,7 @@ import com.example.data.model.AiModelTier
 import com.example.data.model.CapabilityMode
 import com.example.data.repository.AuraPdfExporter
 import com.example.ui.AppDestination
+import com.example.ui.ArtifactLaunchPayload
 import com.example.ui.ChatViewModel
 import com.example.ui.components.AssistantMessageBlock
 import com.example.ui.components.AuraToolsSheet
@@ -84,6 +91,8 @@ import com.example.ui.components.GeminiSparkleIcon
 import com.example.ui.components.ModelSelectorSheet
 import com.example.ui.components.StreamingAssistantBlock
 import com.example.ui.components.UserMessageBubble
+import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -179,6 +188,8 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     val runningAutopilotTaskId by viewModel.runningAutopilotTaskId.collectAsStateWithLifecycle()
     val autonomousAgentEnabled by viewModel.autonomousAgentEnabled.collectAsStateWithLifecycle()
     val compareArenaEnabled by viewModel.compareArenaEnabled.collectAsStateWithLifecycle()
+    val appBuilderEnabled by viewModel.appBuilderEnabled.collectAsStateWithLifecycle()
+    val autoLaunchArtifactPreview by viewModel.autoLaunchArtifactPreview.collectAsStateWithLifecycle()
     val workbenchConfig by viewModel.workbenchConfig.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val activeProjectId by viewModel.activeProjectId.collectAsStateWithLifecycle()
@@ -229,6 +240,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
     var isInChatSearchOpen by remember { mutableStateOf(false) }
     var inChatQuery by remember { mutableStateOf("") }
     var editingUserMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var manualPreviewArtifact by remember { mutableStateOf<ArtifactLaunchPayload?>(null) }
 
     LaunchedEffect(openScannerTrigger) {
         if (openScannerTrigger) {
@@ -323,17 +335,24 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
         }
     }
 
-    LaunchedEffect(
-        streamingState?.contentText?.length,
-        streamingState?.thinkingText?.length,
-        streamingState?.compareAlphaText?.length,
-        streamingState?.compareBetaText?.length
-    ) {
-        if (streamingState != null && isNearBottom) {
-            delay(90L)
-            val lastItemIndex = messages.size + 1
-            listState.scrollToItem(lastItemIndex, scrollOffset = Int.MAX_VALUE / 2)
+    val latestStreamingState by rememberUpdatedState(streamingState)
+    val latestMessageCount by rememberUpdatedState(messages.size)
+    val latestIsNearBottom by rememberUpdatedState(isNearBottom)
+    val activeStreamId = streamingState?.messageId
+    LaunchedEffect(activeStreamId) {
+        if (activeStreamId == null) return@LaunchedEffect
+        snapshotFlow {
+            val s = latestStreamingState
+            if (s == null) 0
+            else s.contentText.length + s.thinkingText.length + s.compareAlphaText.length + s.compareBetaText.length
         }
+            .collect {
+                if (latestIsNearBottom) {
+                    val lastItemIndex = latestMessageCount + 1
+                    listState.scrollToItem(lastItemIndex, scrollOffset = Int.MAX_VALUE / 2)
+                    delay(75L)
+                }
+            }
     }
 
     ModalNavigationDrawer(
@@ -369,6 +388,21 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                 onTogglePin = { viewModel.togglePinConversation(it) },
                 onRenameConversation = { id, title -> viewModel.renameConversation(id, title) },
                 onDeleteConversation = { viewModel.deleteConversation(it) },
+                onOpenImageStudio = {
+                    viewModel.selectModel(AiModelTier.NANO_BANANA_2_1)
+                    scope.launch { drawerState.close() }
+                },
+                onOpenAppBuilder = {
+                    if (!appBuilderEnabled) {
+                        viewModel.toggleAppBuilderMode()
+                    }
+                    scope.launch { drawerState.close() }
+                },
+                onOpenSlides = {
+                    viewModel.selectCapability(CapabilityMode.STANDARD)
+                    viewModel.updateComposerText("Create an interactive slide deck in ```slides format about: ")
+                    scope.launch { drawerState.close() }
+                },
                 onOpenPersonaStudio = {
                     scope.launch { drawerState.close() }
                     viewModel.navigateTo(AppDestination.PersonaStudio)
@@ -426,16 +460,65 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             topBar = {
                 Column(modifier = Modifier.fillMaxWidth()) {
+                    val isHomeEmpty = messages.isEmpty() && streamingState == null
+                    val activeTitle = remember(conversations, activeConversationId) {
+                        conversations.find { it.id == activeConversationId }?.title ?: "Aura AI"
+                    }
                     AuraTopBar(
-                        modelShortName = when {
-                            selectedModel.isImageModel -> "Aura Imagine"
-                            compareArenaEnabled -> "Aura Arena"
-                            else -> "Aura AI"
-                        },
+                        conversationTitle = activeTitle,
+                        isHomeEmpty = isHomeEmpty,
+                        isStreaming = streamingState != null,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenModelSelector = { showModelSheet = true },
                         onNewChat = { viewModel.startNewChat() }
                     )
+
+                    activeProject?.let { project ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .clickable { showProjectsSheet = true }
+                                .testTag("top_active_project_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FolderShared,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = project.name,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "WORKSPACE",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontSize = 9.sp,
+                                        letterSpacing = 0.6.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
 
                     AnimatedVisibility(visible = isInChatSearchOpen && messages.isNotEmpty()) {
                         val trimmedQuery = inChatQuery.trim()
@@ -532,6 +615,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     councilModeEnabled = councilModeEnabled,
                     autonomousAgentEnabled = autonomousAgentEnabled,
                     compareArenaEnabled = compareArenaEnabled,
+                    appBuilderEnabled = appBuilderEnabled,
                     jsonSchemaActive = workbenchConfig.jsonSchemaMode,
                     activeProjectName = activeProject?.name,
                     enabledWebhookCount = enabledWebhookCount,
@@ -547,7 +631,9 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         }
                         viewModel.selectCapability(nextMode)
                     },
+                    onToggleAppBuilder = { viewModel.toggleAppBuilderMode() },
                     onOpenToolsSheet = { showToolsSheet = true },
+                    onOpenModelSelector = { showModelSheet = true },
                     onApplySlashCommand = { viewModel.applySlashCommand(it) },
                     onPickImage = {
                         photoPickerLauncher.launch(
@@ -556,12 +642,13 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     },
                     onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) },
                     onClearAttachment = { viewModel.clearAttachment() },
-                    onClearImagineMode = { viewModel.selectModel(AiModelTier.GEMINI_3_8_FLASH) },
+                    onClearImagineMode = { viewModel.selectModel(AiModelTier.AUTO_ROUTER) },
                     onClearSandboxMode = { viewModel.toggleCodeExecution() },
                     onClearSelfVerify = { viewModel.toggleSelfVerify() },
                     onClearCouncilMode = { viewModel.toggleCouncilMode() },
                     onClearAutonomousAgent = { viewModel.toggleAutonomousAgent() },
                     onClearCompareArena = { viewModel.toggleCompareArena() },
+                    onClearAppBuilder = { viewModel.toggleAppBuilderMode() },
                     onOpenWorkbench = { showWorkbenchSheet = true },
                     onOpenProjects = { showProjectsSheet = true },
                     onOpenWebhooks = { showWebhooksSheet = true },
@@ -581,6 +668,10 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                     WelcomeEmptyState(
                         selectedLanguage = selectedLanguage,
                         hasEffectiveApiKey = hasEffectiveApiKey,
+                        appBuilderEnabled = appBuilderEnabled,
+                        compareArenaEnabled = compareArenaEnabled,
+                        deepResearchEnabled = (selectedCapability == CapabilityMode.DEEP_RESEARCH),
+                        isImageModeActive = selectedModel.isImageModel,
                         onSelectLanguage = { viewModel.selectLanguage(it) },
                         onOpenApiKeySettings = { showSettingsSheet = true },
                         onStarterSelected = { starter ->
@@ -592,7 +683,36 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                         },
                         onOpenPersonaStudio = { viewModel.navigateTo(AppDestination.PersonaStudio) },
                         onOpenLiveVoice = { viewModel.navigateTo(AppDestination.LiveVoice) },
-                        onOpenToolsSheet = { showToolsSheet = true }
+                        onOpenToolsSheet = { showToolsSheet = true },
+                        onActivateAppBuilder = { viewModel.toggleAppBuilderMode() },
+                        onActivateManusAgent = {
+                            if (!autonomousAgentEnabled) {
+                                viewModel.toggleAutonomousAgent()
+                            } else {
+                                viewModel.showToastMessage("Manus Autonomous Agent is active")
+                            }
+                        },
+                        onOpenWorkbench = { showWorkbenchSheet = true },
+                        onActivateCompareArena = { viewModel.toggleCompareArena() },
+                        onActivateDeepResearch = {
+                            viewModel.selectCapability(
+                                if (selectedCapability == CapabilityMode.DEEP_RESEARCH) {
+                                    CapabilityMode.STANDARD
+                                } else {
+                                    CapabilityMode.DEEP_RESEARCH
+                                }
+                            )
+                        },
+                        onActivateSlides = {
+                            viewModel.selectCapability(CapabilityMode.STANDARD)
+                            viewModel.updateComposerText("Create an interactive slide deck in ```slides format about: ")
+                        },
+                        onActivateImages = {
+                            viewModel.selectModel(
+                                if (selectedModel.isImageModel) AiModelTier.AUTO_ROUTER
+                                else AiModelTier.NANO_BANANA_2_1
+                            )
+                        }
                     )
                 } else {
                     val lastAssistantId = remember(messages) {
@@ -656,6 +776,12 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
                                     onAutoFixArtifactError = { errLog, code ->
                                         viewModel.autoFixArtifactCode(errLog, code)
                                     },
+                                    onLaunchLiveApp = { title, language, code ->
+                                        manualPreviewArtifact = ArtifactLaunchPayload(title, language, code)
+                                    },
+                                    onPinBuiltApp = { title, code ->
+                                        viewModel.pinBuiltAppShortcut(title, code)
+                                    },
                                     onShare = {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -701,6 +827,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             councilModeEnabled = councilModeEnabled,
             autonomousAgentEnabled = autonomousAgentEnabled,
             compareArenaEnabled = compareArenaEnabled,
+            appBuilderEnabled = appBuilderEnabled,
             jsonSchemaActive = workbenchConfig.jsonSchemaMode,
             activeProjectName = activeProject?.name,
             artifactCount = artifacts.size,
@@ -727,6 +854,7 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             onToggleCouncilMode = { viewModel.toggleCouncilMode() },
             onToggleAutonomousAgent = { viewModel.toggleAutonomousAgent() },
             onToggleCompareArena = { viewModel.toggleCompareArena() },
+            onToggleAppBuilder = { viewModel.toggleAppBuilderMode() },
             onToggleLiveVoiceReadout = { viewModel.toggleLiveVoiceReadout() },
             onOpenWorkbench = { showWorkbenchSheet = true },
             onOpenProjects = { showProjectsSheet = true },
@@ -1007,6 +1135,29 @@ private fun AuraChatWorkspace(viewModel: ChatViewModel) {
             }
         )
     }
+
+    val activeLivePreview = autoLaunchArtifactPreview ?: manualPreviewArtifact
+    if (activeLivePreview != null) {
+        ArtifactPreviewDialog(
+            language = activeLivePreview.language,
+            code = activeLivePreview.code,
+            titleHint = activeLivePreview.title,
+            onAutoFixError = { errLog, code ->
+                viewModel.consumeAutoLaunchArtifact()
+                manualPreviewArtifact = null
+                viewModel.autoFixArtifactCode(errLog, code)
+            },
+            onIterateApp = { instruction, code ->
+                viewModel.consumeAutoLaunchArtifact()
+                manualPreviewArtifact = null
+                viewModel.iterateBuiltApp(instruction, code)
+            },
+            onDismiss = {
+                viewModel.consumeAutoLaunchArtifact()
+                manualPreviewArtifact = null
+            }
+        )
+    }
 }
 
 private fun sharePdfUri(context: android.content.Context, uri: Uri, chooserTitle: String) {
@@ -1020,7 +1171,9 @@ private fun sharePdfUri(context: android.content.Context, uri: Uri, chooserTitle
 
 @Composable
 private fun AuraTopBar(
-    modelShortName: String,
+    conversationTitle: String,
+    isHomeEmpty: Boolean,
+    isStreaming: Boolean,
     onOpenDrawer: () -> Unit,
     onOpenModelSelector: () -> Unit,
     onNewChat: () -> Unit
@@ -1030,63 +1183,92 @@ private fun AuraTopBar(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(
-            onClick = onOpenDrawer,
+        // Circular Dark Menu Button
+        Box(
             modifier = Modifier
                 .minimumInteractiveComponentSize()
-                .testTag("top_open_drawer_button")
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Menu,
-                contentDescription = stringResource(R.string.cd_open_drawer),
-                tint = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(22.dp))
+                .size(42.dp)
+                .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .border(
                     width = 1.dp,
                     color = MaterialTheme.colorScheme.outlineVariant,
-                    shape = RoundedCornerShape(22.dp)
+                    shape = CircleShape
                 )
-                .clickable(onClick = onOpenModelSelector)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-                .testTag("model_selector_pill"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .clickable(onClick = onOpenDrawer)
+                .testTag("top_open_drawer_button"),
+            contentAlignment = Alignment.Center
         ) {
-            GeminiSparkleIcon(size = 16.dp)
-            Text(
-                text = modelShortName,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
             Icon(
-                imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = "Switch Aura AI mode",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
+                imageVector = Icons.Rounded.Menu,
+                contentDescription = stringResource(R.string.cd_open_drawer),
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
             )
         }
 
-        IconButton(
-            onClick = onNewChat,
-            modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .testTag("top_new_chat_button")
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.EditNote,
-                contentDescription = stringResource(R.string.cd_new_chat),
-                tint = MaterialTheme.colorScheme.onSurface
-            )
+        // Centered Conversation Title on active chat (clean empty canvas on home)
+        if (!isHomeEmpty) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 12.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable(onClick = onOpenModelSelector)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("model_selector_pill"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                if (isStreaming) {
+                    GeminiSparkleIcon(size = 15.dp, animate = true)
+                    Spacer(modifier = Modifier.size(6.dp))
+                }
+                Text(
+                    text = conversationTitle,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        // Circular Dark New Chat Button on active chat
+        if (!isHomeEmpty) {
+            Box(
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        shape = CircleShape
+                    )
+                    .clickable(onClick = onNewChat)
+                    .testTag("top_new_chat_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.EditNote,
+                    contentDescription = stringResource(R.string.cd_new_chat),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.size(42.dp))
         }
     }
 }

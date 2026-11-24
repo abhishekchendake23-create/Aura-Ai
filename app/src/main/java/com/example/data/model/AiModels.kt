@@ -384,6 +384,13 @@ data class SlashCommand(
 
 val AURA_SLASH_COMMANDS = listOf(
     SlashCommand(
+        trigger = "/app",
+        title = "Auto App Builder",
+        subtitle = "Plan, code, verify & auto-launch live interactive app",
+        promptPrefix = "Build a complete interactive web app for:\n",
+        suggestedMode = CapabilityMode.CODE_ARCHITECT
+    ),
+    SlashCommand(
         trigger = "/research",
         title = "Deep Research Agent",
         subtitle = "Multi-step web investigation + cited executive report",
@@ -499,8 +506,26 @@ val AURA_SLASH_COMMANDS = listOf(
 
 val DEFAULT_PROMPT_STARTERS = listOf(
     PromptStarter(
+        id = "auto_pomodoro_app",
+        title = "Build a Focus Timer App",
+        subtitle = "Auto-builds & launches live interactive app",
+        prompt = "Build a complete, sleek dark-mode Pomodoro Focus Timer & Task List app with circular SVG countdown ring, custom focus/break intervals, session stats, and sound-free visual alerts.",
+        category = "App",
+        suggestedModel = AiModelTier.GEMINI_3_8_FLASH,
+        suggestedMode = CapabilityMode.CODE_ARCHITECT
+    ),
+    PromptStarter(
+        id = "auto_expense_app",
+        title = "Build Expense Tracker App",
+        subtitle = "Interactive budget dashboard + live chart",
+        prompt = "Build a complete interactive Expense & Budget Tracker web app with quick expense entry, category filter pills, live SVG spending breakdown chart, and monthly total summary.",
+        category = "App",
+        suggestedModel = AiModelTier.GEMINI_3_8_FLASH,
+        suggestedMode = CapabilityMode.CODE_ARCHITECT
+    ),
+    PromptStarter(
         id = "deep_research_agent",
-        title = "Deep Research Agent",
+        title = "Deep Research Report",
         subtitle = "Multi-angle web report + trade-offs",
         prompt = "Research and compare the top local-first Android AI architectures in 2025–2026: on-device SLM vs edge hybrid routing, latency benchmarks, and a Markdown decision matrix.",
         category = "Research",
@@ -509,8 +534,8 @@ val DEFAULT_PROMPT_STARTERS = listOf(
     ),
     PromptStarter(
         id = "code_arch",
-        title = "Staff Engineer Code Studio",
-        subtitle = "Zero-error Kotlin MVVM + StateFlow",
+        title = "Staff Code Architect",
+        subtitle = "Production Kotlin MVVM + StateFlow",
         prompt = "Architect a production-grade Jetpack Compose screen with a StateFlow ViewModel, offline-first Room sync, and defensive error handling for a live habit tracker.",
         category = "Code",
         suggestedModel = AiModelTier.GEMINI_3_8_FLASH,
@@ -518,27 +543,18 @@ val DEFAULT_PROMPT_STARTERS = listOf(
     ),
     PromptStarter(
         id = "hard_math",
-        title = "Solve hard KaTeX Integration",
-        subtitle = "Olympiad-grade steps & boxed proof",
+        title = "Solve KaTeX Calculus",
+        subtitle = "Step-by-step derivation & check",
         prompt = "Pick a genuinely challenging JEE Advanced / Olympiad definite integration problem and solve it step-by-step using crisp KaTeX equations and verification.",
         category = "Math",
         suggestedModel = AiModelTier.GEMINI_3_8_FLASH,
         suggestedMode = CapabilityMode.DEEP_THINK
     ),
     PromptStarter(
-        id = "live_diagram",
-        title = "Interactive Flow & HTML Lab",
-        subtitle = "Preview live Mermaid & SVG diagrams",
-        prompt = "Create an interactive HTML + SVG dark AMOLED solar system explorer card and a Mermaid architecture flowchart showing how Aura AI processes requests.",
-        category = "Artifact",
-        suggestedModel = AiModelTier.AUTO_ROUTER,
-        suggestedMode = CapabilityMode.CODE_ARCHITECT
-    ),
-    PromptStarter(
         id = "imagine_art",
-        title = "Create futuristic AMOLED art",
+        title = "Create Obsidian Art",
         subtitle = "Generate artwork with Aura Imagine",
-        prompt = "A sleek futuristic glass prism floating over calm dark obsidian water at night, subtle bioluminescent sapphire and violet reflections, ultra clean minimalist photography",
+        prompt = "A sleek futuristic glass prism floating over calm dark obsidian water at night, subtle bioluminescent sapphire and amber reflections, ultra clean minimalist photography",
         category = "Imagine",
         suggestedModel = AiModelTier.NANO_BANANA_2_1,
         suggestedMode = CapabilityMode.STANDARD

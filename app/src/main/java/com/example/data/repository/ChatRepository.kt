@@ -317,6 +317,30 @@ class ChatRepository(private val dao: AuraDao) {
         return saved
     }
 
+    suspend fun getArtifactById(id: String): ArtifactEntity? = dao.getArtifactById(id)
+
+    suspend fun saveStandaloneHtmlArtifact(
+        conversationId: String,
+        messageId: String,
+        title: String,
+        htmlCode: String
+    ): ArtifactEntity {
+        val cleanTitle = title.trim().ifBlank { "Aura App" }
+        val prevVersion = dao.getArtifactMaxVersionForTitle(cleanTitle) ?: 0
+        val entity = ArtifactEntity(
+            id = UUID.randomUUID().toString(),
+            conversationId = conversationId,
+            messageId = messageId,
+            title = cleanTitle,
+            language = "html",
+            code = htmlCode,
+            versionNumber = prevVersion + 1,
+            createdAt = System.currentTimeMillis()
+        )
+        dao.upsertArtifact(entity)
+        return entity
+    }
+
     suspend fun deleteArtifact(id: String) = dao.deleteArtifact(id)
 
     // Reusable AI Studio Prompt Library

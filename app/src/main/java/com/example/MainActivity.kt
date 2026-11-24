@@ -8,9 +8,13 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.ThemeMode
+import com.example.service.AppShortcutHelper
 import com.example.service.AutopilotScheduler
 import com.example.ui.ChatViewModel
 import com.example.ui.screens.AuraAppRoot
@@ -35,6 +39,27 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by chatViewModel.themeMode.collectAsStateWithLifecycle()
+            val systemDark = isSystemInDarkTheme()
+            val isDark = when (themeMode) {
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+                ThemeMode.SYSTEM -> systemDark
+            }
+
+            LaunchedEffect(isDark) {
+                val barStyle = if (isDark) {
+                    SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(
+                        android.graphics.Color.TRANSPARENT,
+                        android.graphics.Color.TRANSPARENT
+                    )
+                }
+                enableEdgeToEdge(
+                    statusBarStyle = barStyle,
+                    navigationBarStyle = barStyle
+                )
+            }
 
             AuraTheme(themeMode = themeMode) {
                 AuraAppRoot(viewModel = chatViewModel)
@@ -50,6 +75,25 @@ class MainActivity : ComponentActivity() {
 
     private fun processIncomingIntent(incoming: Intent?) {
         if (incoming == null) return
+
+        if (incoming.action == AppShortcutHelper.ACTION_LAUNCH_BUILT_APP ||
+            incoming.hasExtra(AppShortcutHelper.EXTRA_PINNED_APP_PATH) ||
+            incoming.hasExtra(AppShortcutHelper.EXTRA_LAUNCH_ARTIFACT_ID)
+        ) {
+            val artifactId = incoming.getStringExtra(AppShortcutHelper.EXTRA_LAUNCH_ARTIFACT_ID)
+            val title = incoming.getStringExtra(AppShortcutHelper.EXTRA_PINNED_APP_TITLE)
+            val filePath = incoming.getStringExtra(AppShortcutHelper.EXTRA_PINNED_APP_PATH)
+            chatViewModel.openPinnedAppShortcut(
+                artifactId = artifactId,
+                fallbackTitle = title,
+                fallbackFilePath = filePath
+            )
+            incoming.action = null
+            incoming.removeExtra(AppShortcutHelper.EXTRA_LAUNCH_ARTIFACT_ID)
+            incoming.removeExtra(AppShortcutHelper.EXTRA_PINNED_APP_TITLE)
+            incoming.removeExtra(AppShortcutHelper.EXTRA_PINNED_APP_PATH)
+            return
+        }
 
         val autopilotConvoId = incoming.getStringExtra(AutopilotScheduler.EXTRA_CONVERSATION_ID)
         if (!autopilotConvoId.isNullOrBlank()) {

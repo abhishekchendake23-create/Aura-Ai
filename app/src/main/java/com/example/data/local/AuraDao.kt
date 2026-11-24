@@ -232,6 +232,9 @@ interface AuraDao {
     @Query("SELECT * FROM artifacts ORDER BY createdAt DESC")
     suspend fun getAllArtifactsOnce(): List<ArtifactEntity>
 
+    @Query("SELECT * FROM artifacts WHERE id = :id LIMIT 1")
+    suspend fun getArtifactById(id: String): ArtifactEntity?
+
     @Query("SELECT MAX(versionNumber) FROM artifacts WHERE title = :title")
     suspend fun getArtifactMaxVersionForTitle(title: String): Int?
 

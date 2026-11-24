@@ -52,6 +52,7 @@ class PreferencesManager(private val context: Context) {
         val ACTIVE_PROJECT_ID = stringPreferencesKey("active_project_id")
         val AUTONOMOUS_AGENT_ENABLED = booleanPreferencesKey("autonomous_agent_enabled")
         val COMPARE_ARENA_ENABLED = booleanPreferencesKey("compare_arena_enabled")
+        val APP_BUILDER_ENABLED = booleanPreferencesKey("app_builder_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.auraDataStore.data.map { prefs ->
@@ -169,6 +170,10 @@ class PreferencesManager(private val context: Context) {
 
     val compareArenaEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
         prefs[Keys.COMPARE_ARENA_ENABLED] ?: false
+    }
+
+    val appBuilderEnabled: Flow<Boolean> = context.auraDataStore.data.map { prefs ->
+        prefs[Keys.APP_BUILDER_ENABLED] ?: false
     }
 
     suspend fun getEffectiveApiKeyPool(): List<String> =
@@ -357,6 +362,10 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setCompareArenaEnabled(enabled: Boolean) {
         context.auraDataStore.edit { it[Keys.COMPARE_ARENA_ENABLED] = enabled }
+    }
+
+    suspend fun setAppBuilderEnabled(enabled: Boolean) {
+        context.auraDataStore.edit { it[Keys.APP_BUILDER_ENABLED] = enabled }
     }
 
     companion object {

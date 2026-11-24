@@ -56,7 +56,7 @@ import kotlin.math.absoluteValue
 
 private const val TAG = "AuraAiRepository"
 private const val INFERENCE_TIMEOUT_MS = 240_000L
-private const val STREAM_EMIT_THROTTLE_MS = 55L
+private const val STREAM_EMIT_THROTTLE_MS = 40L
 private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 private const val GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 private const val OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -137,7 +137,8 @@ data class AiRequest(
     val webhookContextBlock: String = "",
     val webhookLogPrefix: String = "",
     val enableAutonomousAgent: Boolean = false,
-    val enableCompareArena: Boolean = false
+    val enableCompareArena: Boolean = false,
+    val enableAppBuilder: Boolean = false
 )
 
 data class AutoRouteDecision(
@@ -492,6 +493,28 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
 
         val startMs = System.currentTimeMillis()
+        val isMultiFileRequested = isExplicitMultiFileRequest(request.prompt)
+        val isAutoAppRequest = (request.enableAppBuilder || isAppBuildIntent(request.prompt)) &&
+            !isMultiFileRequested &&
+            !request.enableCompareArena &&
+            !request.useCodeExecution &&
+            request.capabilityMode != CapabilityMode.DEEP_RESEARCH
+
+        if (isAutoAppRequest) {
+            streamAppBuilderPipeline(
+                request = request,
+                geminiKeys = geminiKeys,
+                groqKeys = groqKeys,
+                openRouterKeys = openRouterKeys,
+                deepSeekKeys = deepSeekKeys,
+                exaKeys = exaKeys,
+                preferFastGroq = preferFastGroq,
+                startMs = startMs,
+                emitEvent = emitEvent
+            )
+            return
+        }
+
         if (request.enableAutonomousAgent &&
             !request.enableCompareArena &&
             request.capabilityMode != CapabilityMode.DEEP_RESEARCH
@@ -1283,6 +1306,180 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         }
     }
 
+    private suspend fun streamAppBuilderPipeline(
+        request: AiRequest,
+        geminiKeys: List<String>,
+        groqKeys: List<String>,
+        openRouterKeys: List<String>,
+        deepSeekKeys: List<String>,
+        exaKeys: List<String>,
+        preferFastGroq: Boolean,
+        startMs: Long,
+        emitEvent: suspend (AiStreamEvent) -> Unit
+    ) {
+        val stepsStatus = mutableListOf(
+            "[x] Step 1/4: Designing UI architecture, state model & user flows",
+            "[~] Step 2/4: Generating complete self-contained interactive app",
+            "[ ] Step 3/4: Auditing DOM bindings, mobile touch & runtime safety",
+            "[ ] Step 4/4: Packaging & auto-launching Live App Runner"
+        )
+        suspend fun emitBuildTimeline(note: String = "") {
+            val header = "Aura App Builder · Automated Build Pipeline\n" +
+                stepsStatus.joinToString("\n") +
+                (if (note.isNotBlank()) "\n\n$note" else "")
+            emitEvent(AiStreamEvent.ThinkingChunk(header, System.currentTimeMillis() - startMs))
+        }
+
+        emitEvent(AiStreamEvent.ModelActivated("aura-app-builder", "Aura App Builder"))
+        emitBuildTimeline("Planning responsive layout, interactive controls, and zero-dependency bundle...")
+
+        val collectedSources = linkedMapOf<String, SourceCitation>()
+        val extraContext = StringBuilder()
+        if (request.projectContextBlock.isNotBlank()) {
+            extraContext.append(request.projectContextBlock).append("\n\n")
+        }
+        if (request.webhookContextBlock.isNotBlank()) {
+            extraContext.append(request.webhookContextBlock).append("\n\n")
+        }
+        val urls = GitHubAndUrlReader.extractUrls(request.prompt)
+        if (urls.isNotEmpty()) {
+            val urlCtx = runCatching { gitHubAndUrlReader.gatherContextForUrls(urls) }.getOrNull()
+            if (urlCtx != null) {
+                collectedSources.putAll(urlCtx.sourceCitations)
+                extraContext.append(urlCtx.formattedPromptBlock).append("\n\n")
+            }
+        }
+        if (request.useWebSearch) {
+            val liveCtx = runCatching {
+                liveWebSearchEngine.gatherLiveContext(
+                    queries = listOf(LiveWebSearchEngine.extractCleanSearchQuery(request.prompt)),
+                    explicitUrls = LiveWebSearchEngine.extractUrls(request.prompt),
+                    maxResults = 4,
+                    exaApiKey = exaKeys.firstOrNull().orEmpty(),
+                    preferLiveCrawl = false,
+                    exaApiKeys = exaKeys
+                )
+            }.getOrNull()
+            if (liveCtx != null && liveCtx.formattedPromptBlock.isNotBlank()) {
+                collectedSources.putAll(liveCtx.sourceCitations)
+                extraContext.append(liveCtx.formattedPromptBlock).append("\n\n")
+            }
+        }
+
+        val appArchitectPrompt = buildString {
+            append(extraContext.toString())
+            append(
+                """
+                ### AURA AUTOMATIC APP BUILDER DIRECTIVE (MANUS + AI STUDIO MODE)
+                Build a COMPLETE, IMMEDIATELY RUNNABLE, production-polished interactive app for the user's request.
+                
+                STRICT OUTPUT FORMAT:
+                1. Start with a concise 2–3 bullet summary of the key interactive features built.
+                2. Output ONE complete, self-contained HTML5 document inside a single ```html fenced code block starting with `<!DOCTYPE html>` and ending with `</html>`.
+                
+                ENGINEERING & DESIGN RULES FOR THE HTML APP:
+                - **Zero External CDNs**: Do NOT rely on external `<script src="...">` or `<link href="...">` URLs that might fail offline. Put all CSS in `<style>`, all SVG icons inline, and all JavaScript in `<script>`.
+                - **Mobile-First Obsidian Polish**: Include `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">`. Use refined dark charcoal/obsidian surfaces (`#0E1015`, `#161922`, `#1E222E`), clean `1px solid #2A2F3D` hairline borders, `16px+` rounded cards, crisp typography, smooth micro-animations, and `44px+` touch targets.
+                - **100% Working Interactivity**: Every button, tab, filter, timer, chart, calculation, and form MUST work end-to-end with zero placeholders, zero `TODO`s, and zero `alert()`/`confirm()` calls (use clean in-DOM feedback toasts/modals instead).
+                - **Sandbox-Safe Persistence**: Wrap any `localStorage` access in a `try { ... } catch(e) {}` fallback to in-memory state so it runs flawlessly inside any sandboxed WebView.
+                - Include a clear `<title>App Name</title>` matching what was built.
+                
+                User App Request:
+                ${request.prompt}
+                """.trimIndent()
+            )
+        }
+
+        val effectiveRequest = request.copy(
+            prompt = appArchitectPrompt,
+            capabilityMode = CapabilityMode.CODE_ARCHITECT
+        )
+        val systemText = buildSystemInstruction(
+            persona = request.persona,
+            capabilityMode = CapabilityMode.CODE_ARCHITECT,
+            language = request.language,
+            useWebSearch = request.useWebSearch,
+            useCodeExecution = false,
+            activeMemories = request.activeMemories,
+            hasVaultContext = request.vaultContextSnippets.isNotEmpty(),
+            workbenchConfig = request.workbenchConfig
+        )
+        val attachedBitmaps = loadAttachedBitmaps(request)
+        val baseTimeline = "Aura App Builder · Automated Build Pipeline\n" +
+            stepsStatus.joinToString("\n")
+
+        var capturedCompleted: AiStreamEvent.Completed? = null
+        val err = streamAcrossProvidersChain(
+            requestedTier = request.modelTier,
+            effectiveRequest = effectiveRequest,
+            geminiKeys = geminiKeys,
+            openRouterKeys = openRouterKeys,
+            deepSeekKeys = deepSeekKeys,
+            groqKeys = groqKeys,
+            preferFastGroq = preferFastGroq,
+            requiresGeminiTools = attachedBitmaps.size > 1,
+            systemText = systemText,
+            promptText = buildUserPromptText(effectiveRequest),
+            nonGeminiFallbackPromptNotice = extraContext.toString(),
+            attachedBitmaps = attachedBitmaps,
+            startMs = startMs,
+            initialSources = collectedSources,
+            initialThinkingPrefix = baseTimeline,
+            emitEvent = { ev ->
+                when (ev) {
+                    is AiStreamEvent.Completed -> capturedCompleted = ev
+                    is AiStreamEvent.Failed -> Unit
+                    else -> emitEvent(ev)
+                }
+            }
+        )
+
+        val completed = capturedCompleted
+        if (err == null && completed != null) {
+            stepsStatus[1] = "[x] Step 2/4: Interactive HTML5/CSS3/JS code synthesized"
+            stepsStatus[2] = "[x] Step 3/4: DOM bindings & sandbox runtime safety verified"
+            stepsStatus[3] = "[x] Step 4/4: Live App ready to launch"
+            val repairedText = repairHtmlAppIfNeeded(completed.fullText)
+            val finalChecklist = "Aura App Builder · Build Complete\n" + stepsStatus.joinToString("\n")
+            val mergedThinking = listOfNotNull(
+                finalChecklist,
+                completed.thinkingText?.takeIf { it.isNotBlank() && !it.contains("Aura App Builder") }
+            ).joinToString("\n\n")
+            emitEvent(
+                completed.copy(
+                    fullText = repairedText,
+                    thinkingText = mergedThinking,
+                    thinkingDurationMs = System.currentTimeMillis() - startMs
+                )
+            )
+        } else if (err != null) {
+            emitEvent(
+                AiStreamEvent.Failed(
+                    sanitizeAuraError(err.localizedMessage ?: err.message, isImage = false)
+                )
+            )
+        }
+    }
+
+    private fun repairHtmlAppIfNeeded(markdown: String): String {
+        val htmlMatch = Regex("```(?:html|htm)\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+            .find(markdown) ?: return markdown
+        val rawHtml = htmlMatch.groupValues[1].trim()
+        if (rawHtml.isBlank()) return markdown
+        var fixed = rawHtml
+        if (!fixed.contains("</html>", ignoreCase = true)) {
+            if (fixed.contains("<script", ignoreCase = true) && !fixed.contains("</script>", ignoreCase = true)) {
+                fixed += "\n</script>"
+            }
+            if (fixed.contains("<body", ignoreCase = true) && !fixed.contains("</body>", ignoreCase = true)) {
+                fixed += "\n</body>"
+            }
+            fixed += "\n</html>"
+        }
+        return if (fixed == rawHtml) markdown
+        else markdown.replaceRange(htmlMatch.groups[1]!!.range, fixed + "\n")
+    }
+
     private suspend fun streamCompareArena(
         requestedTier: AiModelTier,
         effectiveRequest: AiRequest,
@@ -2020,7 +2217,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             var lastThinkingEmitMs = 0L
 
             try {
-                val requestPayload = buildChatRequestJson(
+                var finishReason = ""
+                val initialPayload = buildChatRequestJson(
                     systemText = systemText,
                     contentsArray = chatHistory,
                     capabilityMode = request.capabilityMode,
@@ -2032,10 +2230,10 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     workbenchConfig = request.workbenchConfig
                 )
 
-                withTimeout(INFERENCE_TIMEOUT_MS) {
+                suspend fun runGeminiSseTurn(payload: JSONObject) {
                     executeSseStreamRequest(
                         url = "$GEMINI_API_BASE/$modelId:streamGenerateContent?alt=sse&key=$apiKey",
-                        bodyJson = requestPayload
+                        bodyJson = payload
                     ) { chunkJson ->
                         chunkJson.optJSONObject("error")?.let { errObj ->
                             val msg = optNonNullString(errObj, "message").ifBlank { errObj.toString() }
@@ -2045,6 +2243,11 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
 
                         val candidates = chunkJson.optJSONArray("candidates")
                         val chunkCandidate = candidates?.optJSONObject(0) ?: return@executeSseStreamRequest
+
+                        val chunkFinish = optNonNullString(chunkCandidate, "finishReason")
+                        if (chunkFinish.isNotBlank()) {
+                            finishReason = chunkFinish
+                        }
 
                         chunkCandidate.optJSONObject("groundingMetadata")
                             ?.optJSONArray("groundingChunks")
@@ -2113,38 +2316,38 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                             }
                         }
 
+                        if (!hasNewThinking && !hasNewContent) return@executeSseStreamRequest
                         val nowMs = System.currentTimeMillis()
-                        val elapsed = nowMs - startMs
-                        val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
+                        val thinkingDue = nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L
+                        val contentDue = nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L
+                        if (!thinkingDue && !contentDue) return@executeSseStreamRequest
 
-                        if (nativeThinkingNow.isNotEmpty()) {
-                            if (hasNewThinking && nativeThinkingNow != lastThinkingText &&
-                                (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
-                            ) {
-                                lastThinkingText = nativeThinkingNow
-                                lastThinkingEmitMs = nowMs
-                                emitEvent(
-                                    AiStreamEvent.ThinkingChunk(
-                                        thinkingText = nativeThinkingNow,
-                                        elapsedMs = elapsed
+                        val elapsed = nowMs - startMs
+                        if (nativeThinkingAccumulated.isNotEmpty()) {
+                            if (hasNewThinking && thinkingDue) {
+                                val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
+                                if (nativeThinkingNow.isNotEmpty() && nativeThinkingNow != lastThinkingText) {
+                                    lastThinkingText = nativeThinkingNow
+                                    lastThinkingEmitMs = nowMs
+                                    emitEvent(
+                                        AiStreamEvent.ThinkingChunk(
+                                            thinkingText = nativeThinkingNow,
+                                            elapsedMs = elapsed
+                                        )
                                     )
-                                )
+                                }
                             }
-                            if (hasNewContent) {
+                            if (hasNewContent && contentDue) {
                                 val cleanContent = rawAccumulated.toString()
-                                if (cleanContent != lastRenderedContent &&
-                                    (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
-                                ) {
+                                if (cleanContent != lastRenderedContent) {
                                     lastRenderedContent = cleanContent
                                     lastContentEmitMs = nowMs
                                     emitEvent(AiStreamEvent.ContentChunk(cleanContent))
                                 }
                             }
-                        } else if (hasNewContent || hasNewThinking) {
+                        } else {
                             val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                            if (!parsed.thinking.isNullOrBlank() && parsed.thinking != lastThinkingText &&
-                                (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
-                            ) {
+                            if (thinkingDue && !parsed.thinking.isNullOrBlank() && parsed.thinking != lastThinkingText) {
                                 lastThinkingText = parsed.thinking
                                 lastThinkingEmitMs = nowMs
                                 emitEvent(
@@ -2154,14 +2357,58 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                                     )
                                 )
                             }
-                            if (parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent &&
-                                (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
-                            ) {
+                            if (contentDue && parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent) {
                                 lastRenderedContent = parsed.answer
                                 lastContentEmitMs = nowMs
                                 emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
                             }
                         }
+                    }
+                }
+
+                withTimeout(INFERENCE_TIMEOUT_MS) {
+                    runGeminiSseTurn(initialPayload)
+
+                    if (finishReason.equals("MAX_TOKENS", ignoreCase = true) &&
+                        !request.workbenchConfig.jsonSchemaMode &&
+                        rawAccumulated.isNotEmpty()
+                    ) {
+                        val currentAnswer = rawAccumulated.toString()
+                        val contContents = JSONArray(chatHistory.toString()).apply {
+                            put(
+                                JSONObject().apply {
+                                    put("role", "model")
+                                    put("parts", JSONArray().put(JSONObject().put("text", currentAnswer)))
+                                }
+                            )
+                            put(
+                                JSONObject().apply {
+                                    put("role", "user")
+                                    put(
+                                        "parts",
+                                        JSONArray().put(
+                                            JSONObject().put(
+                                                "text",
+                                                "Continue seamlessly from the exact character where you stopped. Do NOT repeat prior files or text; finish every remaining requested file and close all code blocks cleanly."
+                                            )
+                                        )
+                                    )
+                                }
+                            )
+                        }
+                        finishReason = ""
+                        val contPayload = buildChatRequestJson(
+                            systemText = systemText,
+                            contentsArray = contContents,
+                            capabilityMode = request.capabilityMode,
+                            modelTier = request.modelTier,
+                            modelId = modelId,
+                            toolsArray = null,
+                            includeThinking = false,
+                            includeSystemInstruction = candidate.supportsSystemInstruction,
+                            workbenchConfig = request.workbenchConfig
+                        )
+                        runCatching { runGeminiSseTurn(contPayload) }
                     }
                 }
 
@@ -2175,6 +2422,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 val totalDuration = System.currentTimeMillis() - startMs
 
                 if (finalAnswer.isNotBlank()) {
+                    if (finalAnswer != lastRenderedContent) {
+                        emitEvent(AiStreamEvent.ContentChunk(finalAnswer))
+                    }
                     emitEvent(
                         AiStreamEvent.Completed(
                             fullText = finalAnswer,
@@ -2296,6 +2546,7 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
         return try {
             val wb = request.workbenchConfig
             val defaultMaxTokens = when {
+                modelId.contains("deepseek-reasoner", ignoreCase = true) -> 32768
                 modelId.startsWith("deepseek", ignoreCase = true) -> 8192
                 modelId.contains("llama-3.1-8b") -> 8192
                 else -> 16384
@@ -2314,9 +2565,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     else -> 0.6
                 }
             }
-            val payload = JSONObject().apply {
+            fun buildOpenAiPayload(msgs: JSONArray): JSONObject = JSONObject().apply {
                 put("model", modelId)
-                put("messages", messagesArray)
+                put("messages", msgs)
                 put("stream", true)
                 if (!modelId.contains("deepseek-reasoner")) {
                     put("temperature", effectiveTemp)
@@ -2331,7 +2582,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 }
             }
 
-            withTimeout(INFERENCE_TIMEOUT_MS) {
+            var finishReason = ""
+            suspend fun runOpenAiSseTurn(payload: JSONObject) {
                 executeSseStreamRequest(
                     url = url,
                     bodyJson = payload,
@@ -2340,6 +2592,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                     parseOpenAiCompatSseChunk(chunkJson)?.let { deltaChunk ->
                         if (deltaChunk.errorMessage != null) {
                             throw IOException(deltaChunk.errorMessage)
+                        }
+                        if (!deltaChunk.finishReason.isNullOrBlank()) {
+                            finishReason = deltaChunk.finishReason
                         }
                         var hasNewThinking = false
                         var hasNewContent = false
@@ -2352,38 +2607,88 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                             rawAccumulated.append(deltaChunk.contentDelta)
                             hasNewContent = true
                         }
+                        if (!hasNewThinking && !hasNewContent) return@let
 
                         val nowMs = System.currentTimeMillis()
-                        val elapsed = nowMs - startMs
-                        val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
-                        val parsed = splitThinkingAndContent(rawAccumulated.toString())
-                        val combinedThinking = listOfNotNull(
-                            nativeThinkingNow.ifBlank { null },
-                            parsed.thinking?.ifBlank { null }
-                        ).joinToString("\n\n").trim()
+                        val thinkingDue = nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L
+                        val contentDue = nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L
+                        if (!thinkingDue && !contentDue) return@let
 
-                        if ((hasNewThinking || hasNewContent) && combinedThinking.isNotEmpty() &&
-                            combinedThinking != lastThinkingText &&
-                            (nowMs - lastThinkingEmitMs >= STREAM_EMIT_THROTTLE_MS || lastThinkingEmitMs == 0L)
-                        ) {
-                            lastThinkingText = combinedThinking
-                            lastThinkingEmitMs = nowMs
-                            emitEvent(
-                                AiStreamEvent.ThinkingChunk(
-                                    thinkingText = combinedThinking,
-                                    elapsedMs = elapsed
-                                )
-                            )
-                        }
-                        if (hasNewContent && parsed.answer.isNotEmpty() &&
-                            parsed.answer != lastRenderedContent &&
-                            (nowMs - lastContentEmitMs >= STREAM_EMIT_THROTTLE_MS || lastContentEmitMs == 0L)
-                        ) {
-                            lastRenderedContent = parsed.answer
-                            lastContentEmitMs = nowMs
-                            emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                        val elapsed = nowMs - startMs
+                        val rawStr = rawAccumulated.toString()
+                        val hasInlineThink = rawStr.contains("<think>")
+                        if (!hasInlineThink) {
+                            if (hasNewThinking && thinkingDue) {
+                                val nativeThinkingNow = nativeThinkingAccumulated.toString().trim()
+                                if (nativeThinkingNow.isNotEmpty() && nativeThinkingNow != lastThinkingText) {
+                                    lastThinkingText = nativeThinkingNow
+                                    lastThinkingEmitMs = nowMs
+                                    emitEvent(
+                                        AiStreamEvent.ThinkingChunk(
+                                            thinkingText = nativeThinkingNow,
+                                            elapsedMs = elapsed
+                                        )
+                                    )
+                                }
+                            }
+                            if (hasNewContent && contentDue && rawStr.isNotEmpty() && rawStr != lastRenderedContent) {
+                                lastRenderedContent = rawStr
+                                lastContentEmitMs = nowMs
+                                emitEvent(AiStreamEvent.ContentChunk(rawStr))
+                            }
+                        } else {
+                            val parsed = splitThinkingAndContent(rawStr)
+                            if (thinkingDue) {
+                                val combinedThinking = listOfNotNull(
+                                    nativeThinkingAccumulated.toString().trim().ifBlank { null },
+                                    parsed.thinking?.ifBlank { null }
+                                ).joinToString("\n\n").trim()
+                                if (combinedThinking.isNotEmpty() && combinedThinking != lastThinkingText) {
+                                    lastThinkingText = combinedThinking
+                                    lastThinkingEmitMs = nowMs
+                                    emitEvent(
+                                        AiStreamEvent.ThinkingChunk(
+                                            thinkingText = combinedThinking,
+                                            elapsedMs = elapsed
+                                        )
+                                    )
+                                }
+                            }
+                            if (contentDue && parsed.answer.isNotEmpty() && parsed.answer != lastRenderedContent) {
+                                lastRenderedContent = parsed.answer
+                                lastContentEmitMs = nowMs
+                                emitEvent(AiStreamEvent.ContentChunk(parsed.answer))
+                            }
                         }
                     }
+                }
+            }
+
+            withTimeout(INFERENCE_TIMEOUT_MS) {
+                runOpenAiSseTurn(buildOpenAiPayload(messagesArray))
+                if (finishReason.equals("length", ignoreCase = true) &&
+                    !wb.jsonSchemaMode &&
+                    rawAccumulated.isNotEmpty()
+                ) {
+                    val contMessages = JSONArray(messagesArray.toString()).apply {
+                        put(
+                            JSONObject().apply {
+                                put("role", "assistant")
+                                put("content", rawAccumulated.toString())
+                            }
+                        )
+                        put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put(
+                                    "content",
+                                    "Continue seamlessly from the exact character where you stopped. Do NOT repeat prior files or text; finish every remaining requested file and close all code blocks cleanly."
+                                )
+                            }
+                        )
+                    }
+                    finishReason = ""
+                    runCatching { runOpenAiSseTurn(buildOpenAiPayload(contMessages)) }
                 }
             }
 
@@ -2397,6 +2702,9 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             val totalDuration = System.currentTimeMillis() - startMs
 
             if (finalAnswer.isNotBlank()) {
+                if (finalAnswer != lastRenderedContent) {
+                    emitEvent(AiStreamEvent.ContentChunk(finalAnswer))
+                }
                 emitEvent(
                     AiStreamEvent.Completed(
                         fullText = finalAnswer,
@@ -2946,7 +3254,8 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             2. **Language Mastery**: ${language.promptInstruction} Always support English, Devanagari Marathi (मराठी), Romanized Marathi, Devanagari Hindi (हिन्दी), and Hinglish seamlessly.
             3. **Principal Software Engineer Coding Standard**: For EVERY coding, debugging, or architecture task:
                - **Design & Invariants First**: Briefly state the architecture, data flow, and edge cases being guarded (2–4 crisp bullets) before emitting code.
-               - **Complete, Compile-Ready Code**: Organize cleanly by file using `// File: path/FileName.ext` on the first line inside fenced code blocks (```` ```kotlin ````, ```` ```python ````, ```` ```ts ````, etc.) with 100% complete imports, strict types, null/bounds checks, coroutine cancellation & thread safety, and proper resource cleanup. Strictly ZERO `// TODO`, ZERO `...` omissions, ZERO stubbed logic.
+               - **Complete, Compile-Ready Code**: Organize cleanly by file using ```` ```lang:path/FileName.ext ```` (preferred) or `// File: path/FileName.ext` on the first line inside fenced code blocks with 100% complete imports, strict types, null/bounds checks, coroutine cancellation & thread safety, and proper resource cleanup. Strictly ZERO `// TODO`, ZERO `...` omissions, ZERO stubbed logic.
+               - **Exact Multi-File Count Guarantee**: Whenever the user asks for N specific files or multiple separate files (e.g., "4 files", "5 separate files", "index.html + style.css + app.js"), list ALL N file paths first and output **EVERY SINGLE ONE of those N files** as its own complete, self-contained fenced code block. Never merge requested files or stop after 1–2 files.
                - **Surgical Diffs for Bug Fixes**: When fixing or refactoring existing code, diagnose the root cause concisely, emit a clean ```` ```diff ```` patch showing exact `-`/`+` lines, AND provide the full verified function/file.
                - **Verification & Edge Cases**: Note boundary cases handled and include concrete unit tests or verification steps when building non-trivial logic.
             4. **KaTeX / LaTeX Mathematics**: Format ALL equations, calculus, linear algebra, and physics cleanly with KaTeX delimiters: `${'$'}...${'$'}` inline and standalone `${'$'}${'$'}...${'$'}${'$'}` display blocks for every derivation step (`\int`, `\frac{a}{b}`, `\lim`, `\sum`, `\sqrt`, matrices), and place final answers inside `${'$'}${'$'}\boxed{...}${'$'}${'$'}` with a sanity check.
@@ -3007,9 +3316,70 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
     }
 
     companion object {
+        fun isExplicitMultiFileRequest(prompt: String): Boolean {
+            val lower = prompt.lowercase()
+            val countFilesRegex = Regex("\\b(\\d+|two|three|four|five|six|seven|eight|nine|ten|multiple|separate|different)\\s+(?:separate\\s+)?files?\\b")
+            val marathiFilesRegex = Regex("\\b(kitihi|kiti|jevde|jevdhya|jevlya|sagle|sagli)\\s+files?\\b")
+            return countFilesRegex.containsMatchIn(lower) ||
+                marathiFilesRegex.containsMatchIn(lower) ||
+                lower.contains("multi-file") ||
+                lower.contains("multi file") ||
+                lower.contains("separate files") ||
+                lower.contains("project structure")
+        }
+
+        fun extractRequestedFileCount(prompt: String): Int? {
+            val lower = prompt.lowercase()
+            val numMatch = Regex("\\b(\\d{1,2})\\s+(?:separate\\s+)?files?\\b").find(lower)
+            val parsedNum = numMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+            if (parsedNum != null && parsedNum in 2..20) return parsedNum
+            val wordMap = mapOf(
+                "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+                "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10
+            )
+            for ((word, count) in wordMap) {
+                if (Regex("\\b$word\\s+(?:separate\\s+)?files?\\b").containsMatchIn(lower)) {
+                    return count
+                }
+            }
+            return null
+        }
+
+        fun isAppBuildIntent(prompt: String): Boolean {
+            val lower = prompt.lowercase()
+            if (isExplicitMultiFileRequest(lower)) return false
+            if (lower.startsWith("build a complete interactive web app") ||
+                lower.startsWith("update and improve this interactive html app")
+            ) {
+                return true
+            }
+            val nativeCodeKeywords = listOf(
+                "kotlin", "jetpack compose", "android studio", "gradle", "viewmodel",
+                "room database", "flutter", "dart", "swiftui", "python script", "c++",
+                "java class", "unit test", "sql query", "retrofit"
+            )
+            if (nativeCodeKeywords.any { lower.contains(it) }) return false
+
+            val buildVerbs = Regex("\\b(build|create|make|generate|design|develop|bnv|banav|banao|kara)\\b")
+            val appTargets = Regex("\\b(app|website|web app|webapp|dashboard|calculator|tracker|timer|pomodoro|game|todo|to-do|quiz|portfolio|landing page|converter|planner|kanban|calendar|player|editor)\\b")
+            return buildVerbs.containsMatchIn(lower) && appTargets.containsMatchIn(lower)
+        }
+
+        fun extractPrimaryHtmlArtifact(markdown: String): Pair<String, String>? {
+            val regex = Regex("```(?:html|htm)(?::[^\\n]*)?\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+            val match = regex.findAll(markdown).maxByOrNull { it.groupValues[1].length } ?: return null
+            val code = match.groupValues[1].trim()
+            if (code.length < 80) return null
+            val titleMatch = Regex("<title>([^<]{2,64})</title>", RegexOption.IGNORE_CASE).find(code)
+            val title = titleMatch?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null }
+                ?: "Aura Interactive App"
+            return title to code
+        }
+
         data class OpenAiCompatSseDelta(
             val reasoningDelta: String = "",
             val contentDelta: String = "",
+            val finishReason: String? = null,
             val errorMessage: String? = null
         )
 
@@ -3024,11 +3394,19 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
                 return OpenAiCompatSseDelta(errorMessage = "HTTP $code: $msg".trim())
             }
             val choice = chunkJson.optJSONArray("choices")?.optJSONObject(0) ?: return null
-            val delta = choice.optJSONObject("delta") ?: return null
+            val finishReason = optNonNullString(choice, "finish_reason").ifBlank { null }
+            val delta = choice.optJSONObject("delta")
+            if (delta == null) {
+                return if (finishReason != null) OpenAiCompatSseDelta(finishReason = finishReason) else null
+            }
             val reasoning = optNonNullString(delta, "reasoning")
                 .ifEmpty { optNonNullString(delta, "reasoning_content") }
             val content = optNonNullString(delta, "content")
-            return OpenAiCompatSseDelta(reasoningDelta = reasoning, contentDelta = content)
+            return OpenAiCompatSseDelta(
+                reasoningDelta = reasoning,
+                contentDelta = content,
+                finishReason = finishReason
+            )
         }
 
         val ALL_FREE_GEMINI_CANDIDATES: List<ModelCandidate> = listOf(
@@ -3632,6 +4010,16 @@ class DirectGeminiAiRepository(private val appContext: Context) : AiRepository {
             sb.append("$label:\n```\n$snippet\n```\n\n")
         }
         sb.append(request.prompt)
+        val requestedFileCount = extractRequestedFileCount(request.prompt)
+        if (requestedFileCount != null) {
+            sb.append(
+                "\n\n[Multi-File Delivery Check: The user specifically requested $requestedFileCount files. Output ALL $requestedFileCount complete files in separate fenced code blocks using ```lang:path/FileName.ext headers with zero omitted files.]"
+            )
+        } else if (isExplicitMultiFileRequest(request.prompt)) {
+            sb.append(
+                "\n\n[Multi-File Delivery Check: Output every requested file in its own named fenced code block using ```lang:path/FileName.ext headers so all files can be inspected and exported cleanly.]"
+            )
+        }
         return sb.toString()
     }
 

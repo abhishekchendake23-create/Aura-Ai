@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,9 +45,11 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
@@ -71,6 +74,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -81,6 +85,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.PersonaEntity
@@ -90,6 +95,7 @@ import com.example.data.model.AppLanguage
 import com.example.data.model.AttachmentDraft
 import com.example.data.model.CapabilityMode
 import com.example.data.model.SlashCommand
+import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -107,6 +113,7 @@ fun ComposerBar(
     councilModeEnabled: Boolean = false,
     autonomousAgentEnabled: Boolean = false,
     compareArenaEnabled: Boolean = false,
+    appBuilderEnabled: Boolean = false,
     jsonSchemaActive: Boolean = false,
     activeProjectName: String? = null,
     enabledWebhookCount: Int = 0,
@@ -115,7 +122,9 @@ fun ComposerBar(
     onTextChange: (String) -> Unit,
     onToggleDeepSearch: () -> Unit,
     onToggleDeepThink: () -> Unit,
+    onToggleAppBuilder: () -> Unit = {},
     onOpenToolsSheet: () -> Unit,
+    onOpenModelSelector: () -> Unit = {},
     onApplySlashCommand: (SlashCommand) -> Unit,
     onPickImage: () -> Unit,
     onOpenLiveVoice: () -> Unit,
@@ -126,6 +135,7 @@ fun ComposerBar(
     onClearCouncilMode: () -> Unit = {},
     onClearAutonomousAgent: () -> Unit = {},
     onClearCompareArena: () -> Unit = {},
+    onClearAppBuilder: () -> Unit = {},
     onOpenWorkbench: () -> Unit = {},
     onOpenProjects: () -> Unit = {},
     onOpenWebhooks: () -> Unit = {},
@@ -152,10 +162,24 @@ fun ComposerBar(
         }
     }
 
+    val dockBorderColor = when {
+        appBuilderEnabled && !isImageActive -> auraColors.amber.copy(alpha = 0.65f)
+        text.isNotBlank() -> MaterialTheme.colorScheme.outline
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.0f),
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
+                        MaterialTheme.colorScheme.background
+                    )
+                )
+            )
             .navigationBarsPadding()
             .imePadding()
             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -164,23 +188,38 @@ fun ComposerBar(
         // Slash Command Autocomplete Studio (only appears when typing `/`)
         AnimatedVisibility(visible = matchingCommands.isNotEmpty()) {
             Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         width = 1.dp,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                        shape = RoundedCornerShape(20.dp)
+                        brush = Brush.linearGradient(
+                            listOf(
+                                auraColors.sparkleStart.copy(alpha = 0.45f),
+                                MaterialTheme.colorScheme.outlineVariant
+                            )
+                        ),
+                        shape = RoundedCornerShape(22.dp)
                     )
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 220.dp)
+                        .heightIn(max = 240.dp)
                         .padding(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
+                    Text(
+                        text = "SLASH COMMAND STUDIO",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = JetBrainsMonoFamily,
+                            fontSize = 9.sp,
+                            letterSpacing = 0.8.sp
+                        ),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                    )
                     matchingCommands.take(5).forEach { cmd ->
                         Row(
                             modifier = Modifier
@@ -199,8 +238,10 @@ fun ComposerBar(
                             ) {
                                 Text(
                                     text = cmd.trigger,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -226,29 +267,32 @@ fun ComposerBar(
             }
         }
 
-        // Minimal AMOLED Reference Composer Pill (matching clean reference layout)
+        // Ultra-Clean Rounded Composer Card
         Surface(
-            shape = RoundedCornerShape(28.dp),
+            shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = 0.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .border(
                     width = 1.dp,
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(28.dp)
+                    color = dockBorderColor.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(26.dp)
                 )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Active attachment or special mode indicator inside pill
                 AnimatedVisibility(
                     visible = attachment != null || isImageActive || codeExecutionEnabled ||
+                        webSearchEnabled || isThinkActive ||
                         selectedLanguage != AppLanguage.AUTO ||
                         selectedCapability == CapabilityMode.DEEP_RESEARCH || vaultRagActive ||
+                        (appBuilderEnabled && !isImageActive) ||
                         (selfVerifyEnabled && !isImageActive) ||
                         (councilModeEnabled && !isImageActive) ||
                         (autonomousAgentEnabled && !isImageActive) ||
@@ -327,9 +371,22 @@ fun ComposerBar(
                                 onDismiss = onClearSandboxMode
                             )
                         }
+                        if (!isImageActive && webSearchEnabled) {
+                            MiniDismissBadge(
+                                label = "Web",
+                                onDismiss = onToggleDeepSearch
+                            )
+                        }
+                        if (!isImageActive && isThinkActive) {
+                            MiniDismissBadge(
+                                label = "Deep Think",
+                                onDismiss = onToggleDeepThink
+                            )
+                        }
                         if (!isImageActive && selectedCapability == CapabilityMode.DEEP_RESEARCH) {
                             MiniDismissBadge(
-                                label = "Research Agent",
+                                label = "Deep Research",
+                                accentColor = auraColors.emerald,
                                 onDismiss = onOpenToolsSheet
                             )
                         }
@@ -352,6 +409,13 @@ fun ComposerBar(
                                 label = "Self-Verify",
                                 accentColor = auraColors.emerald,
                                 onDismiss = onClearSelfVerify
+                            )
+                        }
+                        if (!isImageActive && appBuilderEnabled) {
+                            MiniDismissBadge(
+                                label = "App Builder",
+                                accentColor = auraColors.amber,
+                                onDismiss = onClearAppBuilder
                             )
                         }
                         if (!isImageActive && autonomousAgentEnabled) {
@@ -407,19 +471,19 @@ fun ComposerBar(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 28.dp, max = 148.dp)
-                        .padding(horizontal = 4.dp),
+                        .heightIn(min = 26.dp, max = 148.dp)
+                        .padding(horizontal = 2.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (text.isEmpty()) {
                         Text(
-                            text = if (isImageActive) {
-                                stringResource(R.string.composer_image_placeholder)
-                            } else {
-                                stringResource(R.string.composer_placeholder)
+                            text = when {
+                                isImageActive -> stringResource(R.string.composer_image_placeholder)
+                                appBuilderEnabled -> "Describe the app you want Aura to build…"
+                                else -> stringResource(R.string.composer_placeholder)
                             },
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
                         )
                     }
                     BasicTextField(
@@ -437,7 +501,7 @@ fun ComposerBar(
                     )
                 }
 
-                // Reference Bottom Bar: [+] [Image] [Deep] [Think]   ---   [LiveVoice] [↑ Send]
+                // Minimal Bottom Row: [+]  [Auto ⌄]          [Mic]  [↑]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -455,41 +519,39 @@ fun ComposerBar(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Add,
-                                contentDescription = "More tools, language & modes",
+                                contentDescription = "More tools, files, language & modes",
                                 tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(22.dp)
                             )
                         }
 
-                        IconButton(
-                            onClick = onPickImage,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .testTag("attach_image_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Image,
-                                contentDescription = stringResource(R.string.cd_attach_photo),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        val activeModelLabel = when (selectedModel) {
+                            AiModelTier.AUTO_ROUTER -> "Auto"
+                            else -> selectedModel.shortName
                         }
-
-                        if (!isImageActive) {
-                            ComposerModePill(
-                                icon = Icons.Rounded.Search,
-                                label = "Web",
-                                selected = webSearchEnabled,
-                                onClick = onToggleDeepSearch,
-                                tag = "toggle_web_search"
+                        Row(
+                            modifier = Modifier
+                                .heightIn(min = 36.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable(onClick = onOpenModelSelector)
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .testTag("composer_model_selector"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = activeModelLabel,
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
                             )
-
-                            ComposerModePill(
-                                icon = Icons.Rounded.Psychology,
-                                label = "Think",
-                                selected = isThinkActive,
-                                onClick = onToggleDeepThink,
-                                tag = "toggle_deep_think"
+                            Icon(
+                                imageVector = Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = "Switch AI model",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -498,19 +560,16 @@ fun ComposerBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(
+                        IconButton(
+                            onClick = onOpenLiveVoice,
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .clickable(onClick = onOpenLiveVoice)
-                                .testTag("live_voice_button"),
-                            contentAlignment = Alignment.Center
+                                .size(38.dp)
+                                .testTag("live_voice_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.GraphicEq,
+                                imageVector = Icons.Rounded.Mic,
                                 contentDescription = stringResource(R.string.cd_live_voice),
-                                tint = auraColors.sparkleStart,
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -518,7 +577,7 @@ fun ComposerBar(
                         if (isStreaming) {
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
+                                    .size(38.dp)
                                     .clip(CircleShape)
                                     .background(MaterialTheme.colorScheme.errorContainer)
                                     .clickable(onClick = onStop)
@@ -529,15 +588,22 @@ fun ComposerBar(
                                     imageVector = Icons.Rounded.Stop,
                                     contentDescription = stringResource(R.string.cd_stop_generation),
                                     tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         } else {
-                            val sendBg = if (canSend) Color.White else MaterialTheme.colorScheme.surfaceContainerHigh
-                            val sendTint = if (canSend) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            val sendBg = when {
+                                canSend && appBuilderEnabled && !isImageActive -> auraColors.amber
+                                canSend -> MaterialTheme.colorScheme.onSurface
+                                else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                            }
+                            val sendTint = when {
+                                canSend -> MaterialTheme.colorScheme.background
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                            }
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
+                                    .size(38.dp)
                                     .clip(CircleShape)
                                     .background(sendBg)
                                     .clickable(enabled = canSend, onClick = onSend)
@@ -548,7 +614,7 @@ fun ComposerBar(
                                     imageVector = Icons.Rounded.ArrowUpward,
                                     contentDescription = stringResource(R.string.cd_send_message),
                                     tint = sendTint,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -556,50 +622,6 @@ fun ComposerBar(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ComposerModePill(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    tag: String
-) {
-    Row(
-        modifier = Modifier
-            .heightIn(min = 34.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceContainerHigh
-            )
-            .border(
-                width = 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(18.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(15.dp)
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurface
-        )
     }
 }
 
@@ -645,6 +667,7 @@ fun AuraToolsSheet(
     councilModeEnabled: Boolean = false,
     autonomousAgentEnabled: Boolean = false,
     compareArenaEnabled: Boolean = false,
+    appBuilderEnabled: Boolean = false,
     jsonSchemaActive: Boolean = false,
     activeProjectName: String? = null,
     artifactCount: Int = 0,
@@ -665,6 +688,7 @@ fun AuraToolsSheet(
     onToggleCouncilMode: () -> Unit = {},
     onToggleAutonomousAgent: () -> Unit = {},
     onToggleCompareArena: () -> Unit = {},
+    onToggleAppBuilder: () -> Unit = {},
     onToggleLiveVoiceReadout: () -> Unit = {},
     onOpenWorkbench: () -> Unit = {},
     onOpenProjects: () -> Unit = {},
@@ -830,6 +854,18 @@ fun AuraToolsSheet(
                     text = "WORKSPACE ACTIONS",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                ToolActionCard(
+                    icon = Icons.Rounded.PlayArrow,
+                    title = if (appBuilderEnabled) "Auto App Builder ON · Live Preview" else "Auto App Builder (Manus / Studio)",
+                    highlighted = appBuilderEnabled,
+                    accent = auraColors.amber,
+                    onClick = {
+                        onToggleAppBuilder()
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("toggle_app_builder_sheet")
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

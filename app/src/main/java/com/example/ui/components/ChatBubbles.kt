@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Description
@@ -42,8 +43,11 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
@@ -51,8 +55,11 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.StopCircle
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +78,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -78,17 +87,22 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.local.MessageEntity
 import com.example.data.local.parseMessageVariants
+import com.example.data.repository.AuraPdfExporter
+import com.example.data.repository.DirectGeminiAiRepository
 import com.example.data.repository.NativeActionChip
 import com.example.data.repository.NativeActionExtractor
 import com.example.data.repository.ProjectZipExporter
 import com.example.data.repository.parseSources
 import com.example.ui.StreamingMessageState
+import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.LocalAuraColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -160,23 +174,23 @@ fun UserMessageBubble(
             Spacer(modifier = Modifier.height(6.dp))
         }
 
-        Surface(
-            shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp),
-            color = auraColors.userBubble,
+        Box(
             modifier = Modifier
                 .widthIn(max = 316.dp)
+                .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
+                .background(auraColors.userBubble)
                 .border(
-                    width = 1.dp,
+                    width = 0.8.dp,
                     color = if (message.isPinned) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outlineVariant,
-                    shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
                 )
         ) {
             Text(
                 text = message.content,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
             )
         }
 
@@ -186,7 +200,7 @@ fun UserMessageBubble(
         ) {
             if (message.isPinned) {
                 Text(
-                    text = "Pinned Spec",
+                    text = "Pinned",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(end = 4.dp)
@@ -195,27 +209,27 @@ fun UserMessageBubble(
             IconButton(
                 onClick = { onTogglePin(message) },
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(30.dp)
                     .testTag("pin_user_message_${message.id}")
             ) {
                 Icon(
                     imageVector = if (message.isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
                     contentDescription = if (message.isPinned) "Unpin spec from context" else "Pin spec to context",
-                    tint = if (message.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.size(15.dp)
+                    tint = if (message.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
+                    modifier = Modifier.size(14.dp)
                 )
             }
             IconButton(
                 onClick = { onEditMessage(message) },
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(30.dp)
                     .testTag("edit_user_message_${message.id}")
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Edit,
                     contentDescription = "Edit and re-ask message",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.size(15.dp)
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
@@ -239,6 +253,8 @@ fun AssistantMessageBlock(
     onForkHere: () -> Unit = {},
     onExportPdf: () -> Unit = {},
     onAutoFixArtifactError: (errorLog: String, code: String) -> Unit = { _, _ -> },
+    onLaunchLiveApp: (title: String, language: String, code: String) -> Unit = { _, _, _ -> },
+    onPinBuiltApp: (title: String, code: String) -> Unit = { _, _ -> },
     onShare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -250,7 +266,13 @@ fun AssistantMessageBlock(
     val sources = remember(message.sourcesJson) { parseSources(message.sourcesJson) }
     val variants = remember(message.variantsJson) { parseMessageVariants(message.variantsJson) }
     val namedFiles = remember(message.content) { ProjectZipExporter.extractNamedFilesFromMarkdown(message.content) }
+    val builtHtmlApp = remember(message.id, message.content) {
+        if (!message.isError && message.generatedImagePath.isNullOrBlank()) {
+            DirectGeminiAiRepository.extractPrimaryHtmlArtifact(message.content)
+        } else null
+    }
     var copied by remember { mutableStateOf(false) }
+    var moreMenuExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -262,61 +284,14 @@ fun AssistantMessageBlock(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val headerTitle = when {
-                !message.generatedImagePath.isNullOrBlank() -> "Aura Imagine"
-                message.modelDisplayName == "Aura Arena" -> "Aura Arena"
-                else -> "Aura AI"
-            }
-            AssistantHeaderRow(modelName = headerTitle, isStreaming = false)
-
-            if (variants.size > 1) {
-                val activeIdx = message.selectedVariantIndex.coerceIn(0, variants.lastIndex)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                ) {
-                    IconButton(
-                        onClick = { if (activeIdx > 0) onSelectVariant(activeIdx - 1) },
-                        enabled = activeIdx > 0,
-                        modifier = Modifier.size(26.dp).testTag("prev_variant_${message.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
-                            contentDescription = "Previous answer version",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    Text(
-                        text = "${activeIdx + 1} / ${variants.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                    IconButton(
-                        onClick = { if (activeIdx < variants.lastIndex) onSelectVariant(activeIdx + 1) },
-                        enabled = activeIdx < variants.lastIndex,
-                        modifier = Modifier.size(26.dp).testTag("next_variant_${message.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                            contentDescription = "Next answer version",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
+        val attributionLabel = when {
+            !message.generatedImagePath.isNullOrBlank() -> "Aura Imagine"
+            message.modelDisplayName == "Aura Arena" -> "Aura Arena"
+            builtHtmlApp != null || message.modelDisplayName == "Aura Builder" -> "Aura Builder"
+            else -> "Aura AI"
         }
 
         if (message.modelDisplayName == "Aura Arena" && variants.size >= 2) {
@@ -331,25 +306,39 @@ fun AssistantMessageBlock(
                 variants.forEachIndexed { idx, variant ->
                     val label = variant.engineLabel?.takeIf { it.isNotBlank() } ?: "Engine ${idx + 1}"
                     val selected = idx == activeIdx
+                    val dotColor = if (idx == 0) auraColors.sparkleStart else auraColors.emerald
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer
                         else MaterialTheme.colorScheme.surfaceContainer,
                         modifier = Modifier
                             .border(
                                 1.dp,
-                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                                RoundedCornerShape(12.dp)
+                                if (selected) dotColor.copy(alpha = 0.85f) else MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(14.dp)
                             )
                             .clickable { onSelectVariant(idx) }
                             .testTag("arena_tab_${message.id}_$idx")
                     ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(dotColor)
+                            )
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                                ),
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
                 Surface(
@@ -503,6 +492,228 @@ fun AssistantMessageBlock(
             }
         }
 
+        if (builtHtmlApp != null) {
+            val (appTitle, appCode) = builtHtmlApp
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(
+                        width = 1.dp,
+                        color = auraColors.amber.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onLaunchLiveApp(appTitle, "html", appCode) },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(auraColors.amberContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                                tint = auraColors.amber,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = appTitle,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Self-Built App Ready · Offline Runtime",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        Button(
+                            onClick = { onLaunchLiveApp(appTitle, "html", appCode) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = auraColors.amber,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("launch_live_app_${message.id}")
+                        ) {
+                            Text(
+                                text = "Open App",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = auraColors.emerald.copy(alpha = 0.14f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .border(
+                                    1.dp,
+                                    auraColors.emerald.copy(alpha = 0.45f),
+                                    RoundedCornerShape(11.dp)
+                                )
+                                .clickable {
+                                    scope.launch {
+                                        runCatching {
+                                            val (uri, zipName) = withContext(Dispatchers.IO) {
+                                                ProjectZipExporter.exportAndroidApkProjectZipUri(
+                                                    context = context,
+                                                    appName = appTitle,
+                                                    htmlCode = appCode
+                                                )
+                                            }
+                                            val apkZipIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "application/zip"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                putExtra(Intent.EXTRA_SUBJECT, "$appTitle Android APK Project ($zipName)")
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(
+                                                Intent.createChooser(apkZipIntent, "Download Android APK Project (.zip)")
+                                            )
+                                        }
+                                    }
+                                }
+                                .testTag("export_apk_project_${message.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Build,
+                                    contentDescription = "Download Android APK Project ZIP",
+                                    tint = auraColors.emerald,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "APK Project (.zip)",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = auraColors.emerald
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    RoundedCornerShape(11.dp)
+                                )
+                                .clickable { onPinBuiltApp(appTitle, appCode) }
+                                .testTag("pin_app_shortcut_${message.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Home,
+                                    contentDescription = "Add app shortcut to Home Screen",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Add to Home",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    RoundedCornerShape(11.dp)
+                                )
+                                .clickable {
+                                    scope.launch {
+                                        runCatching {
+                                            val (uri, htmlName) = withContext(Dispatchers.IO) {
+                                                AuraPdfExporter.exportHtmlFileUri(
+                                                    context = context,
+                                                    htmlContent = appCode,
+                                                    suggestedTitle = appTitle
+                                                )
+                                            }
+                                            val htmlIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/html"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                putExtra(Intent.EXTRA_SUBJECT, htmlName)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(
+                                                Intent.createChooser(htmlIntent, "Download Standalone App (.html)")
+                                            )
+                                        }
+                                    }
+                                }
+                                .testTag("export_html_app_${message.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = "Download HTML app file",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Download .html",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (message.content.isNotBlank()) {
             MarkdownRenderer(
                 markdown = message.content,
@@ -570,143 +781,251 @@ fun AssistantMessageBlock(
             }
         }
 
+        // Sleek Attribution + Regenerate Row (underneath response text)
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = {
-                    clipboard.setText(AnnotatedString(message.content))
-                    copied = true
-                },
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("copy_message_${message.id}")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                    contentDescription = stringResource(R.string.cd_copy_text),
-                    tint = if (copied) auraColors.emerald else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                GeminiSparkleIcon(size = 16.dp, animate = false)
+                Text(
+                    text = attributionLabel,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Box(
+                    modifier = Modifier
+                        .size(width = 1.dp, height = 12.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onRegenerate)
+                        .padding(horizontal = 4.dp, vertical = 3.dp)
+                        .testTag("regenerate_message_${message.id}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = stringResource(R.string.cd_regenerate),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "Regenerate",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            IconButton(
-                onClick = onToggleSpeak,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("speak_message_${message.id}")
+            if (variants.size > 1) {
+                val activeIdx = message.selectedVariantIndex.coerceIn(0, variants.lastIndex)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    IconButton(
+                        onClick = { if (activeIdx > 0) onSelectVariant(activeIdx - 1) },
+                        enabled = activeIdx > 0,
+                        modifier = Modifier.size(24.dp).testTag("prev_variant_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                            contentDescription = "Previous answer version",
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                    Text(
+                        text = "${activeIdx + 1}/${variants.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                    IconButton(
+                        onClick = { if (activeIdx < variants.lastIndex) onSelectVariant(activeIdx + 1) },
+                        enabled = activeIdx < variants.lastIndex,
+                        modifier = Modifier.size(24.dp).testTag("next_variant_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = "Next answer version",
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Clean Monochrome Icon Action Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = if (isSpeaking) Icons.Rounded.StopCircle else Icons.AutoMirrored.Rounded.VolumeUp,
-                    contentDescription = if (isSpeaking) {
-                        stringResource(R.string.cd_stop_speaking)
-                    } else {
-                        stringResource(R.string.cd_speak_text)
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(message.content))
+                        copied = true
                     },
-                    tint = if (isSpeaking) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp)
-                )
-            }
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("copy_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                        contentDescription = stringResource(R.string.cd_copy_text),
+                        tint = if (copied) auraColors.emerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
 
-            IconButton(
-                onClick = onRegenerate,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("regenerate_message_${message.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = stringResource(R.string.cd_regenerate),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp)
-                )
-            }
+                IconButton(
+                    onClick = onToggleSpeak,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("speak_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = if (isSpeaking) Icons.Rounded.StopCircle else Icons.AutoMirrored.Rounded.VolumeUp,
+                        contentDescription = if (isSpeaking) {
+                            stringResource(R.string.cd_stop_speaking)
+                        } else {
+                            stringResource(R.string.cd_speak_text)
+                        },
+                        tint = if (isSpeaking) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
 
-            IconButton(
-                onClick = onToggleBookmark,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("bookmark_message_${message.id}")
-            ) {
-                Icon(
-                    imageVector = if (message.isBookmarked) Icons.Rounded.Bookmark else Icons.Outlined.BookmarkBorder,
-                    contentDescription = stringResource(R.string.cd_bookmark),
-                    tint = if (message.isBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp)
-                )
-            }
+                IconButton(
+                    onClick = onToggleBookmark,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("bookmark_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = if (message.isBookmarked) Icons.Rounded.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = stringResource(R.string.cd_bookmark),
+                        tint = if (message.isBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
 
-            IconButton(
-                onClick = onShare,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .testTag("share_message_${message.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Share,
-                    contentDescription = stringResource(R.string.cd_share),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
+                IconButton(
+                    onClick = onShare,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("share_message_${message.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Share,
+                        contentDescription = stringResource(R.string.cd_share),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+
+                if (message.content.isNotBlank()) {
+                    IconButton(
+                        onClick = onExportPdf,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("pdf_quick_message_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = "Export PDF",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
 
             if (message.content.isNotBlank()) {
-                IconButton(
-                    onClick = onExportPdf,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("pdf_export_message_${message.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PictureAsPdf,
-                        contentDescription = "Export response as PDF",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onTogglePin,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("pin_message_${message.id}")
-                ) {
-                    Icon(
-                        imageVector = if (message.isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
-                        contentDescription = if (message.isPinned) "Unpin from thread context" else "Pin to thread context",
-                        tint = if (message.isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = { onSaveToMemory(message.content) },
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("save_memory_message_${message.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Psychology,
-                        contentDescription = "Save insight to Aura Memory",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onForkHere,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("fork_message_${message.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.NoteAdd,
-                        contentDescription = "Fork conversation branch from here",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
+                Box {
+                    IconButton(
+                        onClick = { moreMenuExpanded = true },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("more_actions_message_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "More message actions",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = moreMenuExpanded,
+                        onDismissRequest = { moreMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Export as PDF") },
+                            leadingIcon = {
+                                Icon(Icons.Rounded.PictureAsPdf, contentDescription = null)
+                            },
+                            onClick = {
+                                moreMenuExpanded = false
+                                onExportPdf()
+                            },
+                            modifier = Modifier.testTag("pdf_export_message_${message.id}")
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (message.isPinned) "Unpin from Context" else "Pin to Context") },
+                            leadingIcon = {
+                                Icon(
+                                    if (message.isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
+                                    contentDescription = null
+                                )
+                            },
+                            onClick = {
+                                moreMenuExpanded = false
+                                onTogglePin()
+                            },
+                            modifier = Modifier.testTag("pin_message_${message.id}")
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Save to Memory Vault") },
+                            leadingIcon = {
+                                Icon(Icons.Rounded.Psychology, contentDescription = null)
+                            },
+                            onClick = {
+                                moreMenuExpanded = false
+                                onSaveToMemory(message.content)
+                            },
+                            modifier = Modifier.testTag("save_memory_message_${message.id}")
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Branch New Thread") },
+                            leadingIcon = {
+                                Icon(Icons.Rounded.NoteAdd, contentDescription = null)
+                            },
+                            onClick = {
+                                moreMenuExpanded = false
+                                onForkHere()
+                            },
+                            modifier = Modifier.testTag("fork_message_${message.id}")
+                        )
+                    }
                 }
             }
         }
@@ -790,54 +1109,101 @@ fun AssistantMessageBlock(
         if (namedFiles.size >= 2) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = auraColors.emerald.copy(alpha = 0.14f),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
                 modifier = Modifier
+                    .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .border(
                         1.dp,
-                        auraColors.emerald.copy(alpha = 0.55f),
+                        auraColors.emerald.copy(alpha = 0.5f),
                         RoundedCornerShape(16.dp)
                     )
-                    .clickable {
-                        scope.launch {
-                            runCatching {
-                                val (uri, fileCount) = withContext(Dispatchers.IO) {
-                                    ProjectZipExporter.exportMultiFileProjectZipUri(
-                                        context = context,
-                                        markdown = message.content,
-                                        projectName = "aura_project"
-                                    )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${namedFiles.size} Files Ready · Multi-File Bundle",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                            color = auraColors.emerald
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = auraColors.emerald.copy(alpha = 0.16f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    scope.launch {
+                                        runCatching {
+                                            val (uri, fileCount) = withContext(Dispatchers.IO) {
+                                                ProjectZipExporter.exportMultiFileProjectZipUri(
+                                                    context = context,
+                                                    markdown = message.content,
+                                                    projectName = "aura_project"
+                                                )
+                                            }
+                                            val zipIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "application/zip"
+                                                putExtra(Intent.EXTRA_STREAM, uri)
+                                                putExtra(Intent.EXTRA_SUBJECT, "aura_project ($fileCount files)")
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(
+                                                Intent.createChooser(zipIntent, "Download All $fileCount Files (.zip)")
+                                            )
+                                        }
+                                    }
                                 }
-                                val zipIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "application/zip"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    putExtra(Intent.EXTRA_SUBJECT, "aura_project ($fileCount files)")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(
-                                    Intent.createChooser(zipIntent, "Export $fileCount project files (.zip)")
+                                .testTag("export_zip_project_${message.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = "Download all files as ZIP",
+                                    tint = auraColors.emerald,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "Download .zip",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = auraColors.emerald
                                 )
                             }
                         }
                     }
-                    .testTag("export_zip_project_${message.id}")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Download,
-                        contentDescription = null,
-                        tint = auraColors.emerald,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = "Export .zip (${namedFiles.size} files)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = auraColors.emerald
-                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        namedFiles.forEach { file ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = file.relativePath,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -923,6 +1289,7 @@ fun StreamingAssistantBlock(
         val streamHeaderName = when {
             streaming.isGeneratingImage -> "Aura Imagine"
             streaming.isCompareArena -> "Aura Arena"
+            streaming.modelDisplayName == "Aura Builder" -> "Aura Builder"
             else -> "Aura AI"
         }
         AssistantHeaderRow(modelName = streamHeaderName, isStreaming = true)
@@ -970,20 +1337,44 @@ fun StreamingAssistantBlock(
         }
 
         if (streaming.isCompareArena) {
+            val auraColors = LocalAuraColors.current
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "ENGINE ALPHA",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                        .border(
+                            1.dp,
+                            Brush.linearGradient(
+                                listOf(
+                                    auraColors.sparkleStart.copy(alpha = 0.65f),
+                                    MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ),
+                            RoundedCornerShape(18.dp)
                         )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(auraColors.sparkleStart)
+                            )
+                            Text(
+                                text = "ENGINE ALPHA",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = JetBrainsMonoFamily,
+                                    letterSpacing = 0.7.sp
+                                ),
+                                color = auraColors.sparkleStart
+                            )
+                        }
                         if (streaming.compareAlphaText.isNotBlank()) {
                             MarkdownRenderer(markdown = streaming.compareAlphaText, isStreaming = true)
                         } else {
@@ -997,18 +1388,41 @@ fun StreamingAssistantBlock(
                     }
                 }
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, LocalAuraColors.current.emerald.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "ENGINE BETA",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LocalAuraColors.current.emerald
+                        .border(
+                            1.dp,
+                            Brush.linearGradient(
+                                listOf(
+                                    auraColors.emerald.copy(alpha = 0.65f),
+                                    MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ),
+                            RoundedCornerShape(18.dp)
                         )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(auraColors.emerald)
+                            )
+                            Text(
+                                text = "ENGINE BETA",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = JetBrainsMonoFamily,
+                                    letterSpacing = 0.7.sp
+                                ),
+                                color = auraColors.emerald
+                            )
+                        }
                         if (streaming.compareBetaText.isNotBlank()) {
                             MarkdownRenderer(markdown = streaming.compareBetaText, isStreaming = true)
                         } else {
@@ -1031,7 +1445,7 @@ fun StreamingAssistantBlock(
                 isStreaming = true
             )
             val isWritingCode = remember(streaming.contentText) {
-                streaming.contentText.split("```").size % 2 == 0
+                hasUnclosedCodeFence(streaming.contentText)
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1079,15 +1493,55 @@ private fun AssistantHeaderRow(
     modelName: String,
     isStreaming: Boolean
 ) {
+    val auraColors = LocalAuraColors.current
+    val resolvedName = modelName.ifBlank { "Aura AI" }
+    val statusChip = when {
+        isStreaming -> "LIVE" to auraColors.sparkleStart
+        resolvedName == "Aura Arena" -> "A/B ARENA" to auraColors.emerald
+        resolvedName == "Aura Imagine" -> "IMAGINE" to auraColors.sparkleMid
+        resolvedName == "Aura Builder" -> "APP BUILDER" to auraColors.amber
+        else -> null
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         GeminiSparkleIcon(size = 20.dp, animate = isStreaming)
         Text(
-            text = modelName.ifBlank { "Aura AI" },
-            style = MaterialTheme.typography.labelLarge,
+            text = resolvedName,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onSurface
         )
+        statusChip?.let { (label, accent) ->
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = 0.14f))
+                    .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = JetBrainsMonoFamily,
+                        fontSize = 9.sp,
+                        letterSpacing = 0.6.sp
+                    ),
+                    color = accent
+                )
+            }
+        }
     }
+}
+
+private fun hasUnclosedCodeFence(text: String): Boolean {
+    var count = 0
+    var idx = 0
+    while (true) {
+        val found = text.indexOf("```", idx)
+        if (found == -1) break
+        count++
+        idx = found + 3
+    }
+    return count % 2 == 1
 }

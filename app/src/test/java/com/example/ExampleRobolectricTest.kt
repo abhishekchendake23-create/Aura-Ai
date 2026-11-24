@@ -1072,4 +1072,117 @@ class ExampleRobolectricTest {
         assertTrue(repository.getEnabledWebhooksOnce().any { it.id == hook.id })
         assertTrue(repository.observePromptTemplates().first().any { it.id == tpl.id })
     }
+
+    @Test
+    fun `auto app builder detects web app intents, extracts html artifact, and persists preference`() = runTest {
+        // 1. Intent detection triggers on web/interactive app requests (English & Marathi/Hinglish)
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Build a pomodoro focus timer app"))
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Mala ek expense tracker app bnv"))
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Create an interactive calculator dashboard"))
+
+        // Excludes native Android/Kotlin/Compose/Python script requests so normal coding works cleanly
+        assertFalse(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Build a Jetpack Compose Kotlin MVVM app with Room database"))
+        assertFalse(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Create a Python script for data parsing"))
+        assertFalse(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("What is the weather in Pune today?"))
+
+        // 2. HTML artifact extraction finds largest HTML app and reads <title>
+        val markdown = """
+            Here is your Focus App:
+            ```html
+            <!DOCTYPE html>
+            <html>
+            <head><title>Zen Focus Studio</title></head>
+            <body><main id="app"><h1>Focus Timer</h1><button onclick="start()">Start</button></main></body>
+            </html>
+            ```
+        """.trimIndent()
+        val extracted = com.example.data.repository.DirectGeminiAiRepository.extractPrimaryHtmlArtifact(markdown)
+        assertNotNull(extracted)
+        assertEquals("Zen Focus Studio", extracted!!.first)
+        assertTrue(extracted.second.contains("Focus Timer"))
+
+        assertNull(com.example.data.repository.DirectGeminiAiRepository.extractPrimaryHtmlArtifact("```kotlin\nfun hi() {}\n```"))
+
+        // 3. PreferencesManager persists appBuilderEnabled toggle
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+        assertFalse(prefs.appBuilderEnabled.first())
+        prefs.setAppBuilderEnabled(true)
+        assertTrue(prefs.appBuilderEnabled.first())
+        prefs.setAppBuilderEnabled(false)
+        assertFalse(prefs.appBuilderEnabled.first())
+    }
+
+    @Test
+    fun `explicit multi-file prompts preserve file counts and extract heading plus inline named files`() {
+        // Explicit multi-file prompts must NOT collapse into single-file HTML mode
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isExplicitMultiFileRequest("Build a todo app in 5 separate files"))
+        assertTrue(com.example.data.repository.DirectGeminiAiRepository.isExplicitMultiFileRequest("Mala 6 files bnv dashboard sathi"))
+        assertEquals(5, com.example.data.repository.DirectGeminiAiRepository.extractRequestedFileCount("Create a portfolio in 5 files"))
+        assertEquals(4, com.example.data.repository.DirectGeminiAiRepository.extractRequestedFileCount("Give me four separate files for calculator"))
+        assertFalse(com.example.data.repository.DirectGeminiAiRepository.isAppBuildIntent("Create a dashboard website in 5 files"))
+
+        val multiFileMd = """
+            ### 1. `index.html`
+            ```html
+            <!DOCTYPE html><html><body>Hello</body></html>
+            ```
+
+            ### File 2: styles/app.css
+            ```css
+            body { background: #111; }
+            ```
+
+            ```javascript:scripts/main.js
+            console.log('ready');
+            ```
+
+            ```python
+            # File: api/server.py
+            print("ok")
+            ```
+
+            **`README.md`**
+            ```markdown
+            # Project Docs
+            ```
+        """.trimIndent()
+
+        val extracted = com.example.data.repository.ProjectZipExporter.extractNamedFilesFromMarkdown(multiFileMd)
+        assertEquals(5, extracted.size)
+        assertEquals(
+            listOf("index.html", "styles/app.css", "scripts/main.js", "api/server.py", "README.md"),
+            extracted.map { it.relativePath }
+        )
+    }
+
+    @Test
+    fun `android apk project exporter builds complete gradle wrapper-free project and zip bytes`() {
+        val html = "<!DOCTYPE html><html><head><title>Budget Pro</title></head><body><h1>Budget Pro</h1></body></html>"
+        val files = com.example.data.repository.ProjectZipExporter.buildAndroidApkProjectFiles("Budget Pro", html)
+        val paths = files.map { it.relativePath }
+
+        assertTrue("settings.gradle.kts" in paths)
+        assertTrue("app/build.gradle.kts" in paths)
+        assertTrue("app/src/main/AndroidManifest.xml" in paths)
+        assertTrue("app/src/main/res/values/strings.xml" in paths)
+        assertTrue("app/src/main/assets/index.html" in paths)
+        assertTrue(".github/workflows/build-apk.yml" in paths)
+        assertTrue(paths.any { it.endsWith("/MainActivity.kt") })
+
+        val stringsXml = files.first { it.relativePath.endsWith("strings.xml") }.content
+        assertTrue(stringsXml.contains("Budget Pro"))
+
+        val zipBytes = com.example.data.repository.ProjectZipExporter.buildZipBytes(files)
+        assertTrue(zipBytes.size > 500)
+        // Standard ZIP local file header signature 'PK'
+        assertEquals('P'.code.toByte(), zipBytes[0])
+        assertEquals('K'.code.toByte(), zipBytes[1])
+
+        val finishChunk = com.example.data.repository.DirectGeminiAiRepository.parseOpenAiCompatSseChunk(
+            org.json.JSONObject("""{"choices":[{"delta":{},"finish_reason":"length"}]}""")
+        )
+        assertNotNull(finishChunk)
+        assertEquals("length", finishChunk!!.finishReason)
+    }
 }
